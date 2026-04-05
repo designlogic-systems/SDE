@@ -1,0 +1,958 @@
+{
+  "name": "Structured Discovery Engine",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1056,
+        -7360
+      ],
+      "id": "8903e720-317b-4b28-b692-6ac766420de9",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate Input Structure\n// Purpose:\n// Validate a local validation context object containing:\n// - input_data: candidate SDE input object\n// - schema: SDE input schema\n\nconst inputData = $json.input_data;\nconst schema = $json.schema;\n\nif (!inputData || typeof inputData !== \"object\" || Array.isArray(inputData)) {\n  throw new Error(\"Validate Input Structure: input_data must be a top-level object.\");\n}\n\nif (!schema || typeof schema !== \"object\" || Array.isArray(schema)) {\n  throw new Error(\"Validate Input Structure: schema must be a top-level object.\");\n}\n\nconst errors = [];\n\n// --- Helpers ---\nfunction detectType(value) {\n  if (Array.isArray(value)) return \"array\";\n  if (value === null) return \"null\";\n  return typeof value;\n}\n\nfunction addError(code, field, message, extra = {}) {\n  errors.push({\n    code,\n    field,\n    message,\n    ...extra\n  });\n}\n\nfunction pathJoin(base, key) {\n  if (base === \"\") return key;\n  if (String(key).startsWith(\"[\")) return `${base}${key}`;\n  return `${base}.${key}`;\n}\n\nfunction validateAgainstSchema(value, schemaNode, path = \"\") {\n  if (!schemaNode || typeof schemaNode !== \"object\") {\n    return;\n  }\n\n  // 1. Type check\n  if (schemaNode.type) {\n    const actualType = detectType(value);\n\n    if (schemaNode.type === \"object\") {\n      if (actualType !== \"object\") {\n        addError(\n          \"INVALID_TYPE\",\n          path || \"(root)\",\n          `${path || \"input\"} must be an object`,\n          { expected_type: \"object\", actual_type: actualType }\n        );\n        return;\n      }\n    } else if (schemaNode.type === \"array\") {\n      if (actualType !== \"array\") {\n        addError(\n          \"INVALID_TYPE\",\n          path || \"(root)\",\n          `${path || \"input\"} must be an array`,\n          { expected_type: \"array\", actual_type: actualType }\n        );\n        return;\n      }\n    } else {\n      if (actualType !== schemaNode.type) {\n        addError(\n          \"INVALID_TYPE\",\n          path || \"(root)\",\n          `${path || \"value\"} must be of type ${schemaNode.type}`,\n          { expected_type: schemaNode.type, actual_type: actualType }\n        );\n        return;\n      }\n    }\n  }\n\n  // 2. const\n  if (\"const\" in schemaNode) {\n    if (value !== schemaNode.const) {\n      addError(\n        \"INVALID_LITERAL_VALUE\",\n        path || \"(root)\",\n        `${path || \"value\"} must be exactly '${schemaNode.const}'`,\n        { expected: schemaNode.const, actual: value }\n      );\n    }\n  }\n\n  // 3. enum\n  if (Array.isArray(schemaNode.enum)) {\n    if (!schemaNode.enum.includes(value)) {\n      addError(\n        \"INVALID_ENUM_VALUE\",\n        path || \"(root)\",\n        `${path || \"value\"} must be one of: ${schemaNode.enum.join(\", \")}`,\n        { allowed_values: schemaNode.enum, actual: value }\n      );\n    }\n  }\n\n  // 4. string constraints\n  if (schemaNode.type === \"string\") {\n    if (\"minLength\" in schemaNode && typeof value === \"string\") {\n      if (value.length < schemaNode.minLength) {\n        addError(\n          \"MIN_LENGTH_VIOLATION\",\n          path || \"(root)\",\n          `${path || \"value\"} must be at least ${schemaNode.minLength} characters long`,\n          { min_length: schemaNode.minLength, actual_length: value.length }\n        );\n      }\n    }\n\n    if (typeof value === \"string\" && value.trim().length === 0) {\n      addError(\n        \"EMPTY_STRING_NOT_ALLOWED\",\n        path || \"(root)\",\n        `${path || \"value\"} must not be empty or whitespace-only`,\n        { actual_value: value }\n      );\n    }\n  }\n\n  // 5. array constraints\n  if (schemaNode.type === \"array\" && Array.isArray(value)) {\n    if (\"minItems\" in schemaNode && value.length < schemaNode.minItems) {\n      addError(\n        \"MIN_ITEMS_VIOLATION\",\n        path || \"(root)\",\n        `${path || \"array\"} must contain at least ${schemaNode.minItems} items`,\n        { min_items: schemaNode.minItems, actual_count: value.length }\n      );\n    }\n\n    if (schemaNode.uniqueItems === true) {\n      const seen = new Set();\n      for (let i = 0; i < value.length; i++) {\n        const itemKey = JSON.stringify(value[i]);\n        if (seen.has(itemKey)) {\n          addError(\n            \"DUPLICATE_ARRAY_ITEM\",\n            `${path}[${i}]`,\n            `${path}[${i}] must be unique`,\n            { actual_value: value[i] }\n          );\n        } else {\n          seen.add(itemKey);\n        }\n      }\n    }\n\n    if (schemaNode.items) {\n      for (let i = 0; i < value.length; i++) {\n        validateAgainstSchema(value[i], schemaNode.items, `${path}[${i}]`);\n      }\n    }\n  }\n\n  // 6. object constraints\n  if (schemaNode.type === \"object\" && value && typeof value === \"object\" && !Array.isArray(value)) {\n    const props = schemaNode.properties || {};\n    const required = Array.isArray(schemaNode.required) ? schemaNode.required : [];\n\n    // Required fields\n    for (const reqField of required) {\n      if (!(reqField in value)) {\n        addError(\n          \"MISSING_REQUIRED_FIELD\",\n          path ? pathJoin(path, reqField) : reqField,\n          `Missing required field: ${path ? pathJoin(path, reqField) : reqField}`\n        );\n      }\n    }\n\n    // additionalProperties: false\n    if (schemaNode.additionalProperties === false) {\n      for (const key of Object.keys(value)) {\n        if (!(key in props)) {\n          addError(\n            \"UNEXPECTED_FIELD\",\n            path ? pathJoin(path, key) : key,\n            `Unexpected field not allowed by schema: ${path ? pathJoin(path, key) : key}`,\n            { actual_key: key }\n          );\n        }\n      }\n    }\n\n    // Validate declared properties that are present\n    for (const [key, propSchema] of Object.entries(props)) {\n      if (key in value) {\n        validateAgainstSchema(value[key], propSchema, path ? pathJoin(path, key) : key);\n      }\n    }\n  }\n}\n\n// --- Run validation ---\nvalidateAgainstSchema(inputData, schema, \"\");\n\n// --- Final status ---\nconst validation_status = errors.length === 0 ? \"PASS\" : \"FAIL\";\n\n// Emit original input plus validation result\nreturn [\n  {\n    json: {\n      ...inputData,\n      input_validation: {\n        validation_status,\n        error_count: errors.length,\n        errors\n      }\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -160,
+        -7456
+      ],
+      "id": "c6c3c409-78ca-4de6-b533-4b373b6bcee8",
+      "name": "Validate Input Structure"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst data = item.json;\n\nconst inputValidation = data.input_validation || {};\nconst errors = Array.isArray(inputValidation.errors) ? inputValidation.errors : [];\n\nfunction deriveTopLevelReasonCode(errors) {\n  if (!errors.length) return \"UNKNOWN_VALIDATION_FAILURE\";\n\n  const codes = errors.map(e => e.code);\n\n  if (codes.includes(\"MISSING_REQUIRED_FIELD\")) {\n    return \"INPUT_SCHEMA_VIOLATION\";\n  }\n\n  if (\n    codes.includes(\"INVALID_TYPE\") ||\n    codes.includes(\"INVALID_NONEMPTY_STRING\") ||\n    codes.includes(\"INVALID_ARRAY_ITEM\") ||\n    codes.includes(\"INVALID_ENUM_VALUE\") ||\n    codes.includes(\"INVALID_LITERAL_VALUE\") ||\n    codes.includes(\"MIN_LENGTH_VIOLATION\") ||\n    codes.includes(\"UNEXPECTED_FIELD\") ||\n    codes.includes(\"DUPLICATE_ARRAY_ITEM\")\n  ) {\n    return \"INPUT_SCHEMA_VIOLATION\";\n  }\n\n  return \"INPUT_VALIDATION_FAILED\";\n}\n\nfunction buildSummary(errors) {\n  if (!errors.length) {\n    return \"Input validation failed, but no structured violations were provided.\";\n  }\n\n  if (errors.length === 1) {\n    return errors[0].message;\n  }\n\n  return `Input validation failed with ${errors.length} violations.`;\n}\n\nconst topLevelReasonCode = deriveTopLevelReasonCode(errors);\nconst summary = buildSummary(errors);\n\nreturn [\n  {\n    json: {\n      ...data,\n      blocked_result: {\n        status: \"blocked\",\n        can_proceed: false,\n        block_stage: \"input_validation\",\n        reason_code: topLevelReasonCode,\n        reason_summary: summary,\n        violation_count: errors.length,\n        violations: errors\n      }\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        288,
+        -7360
+      ],
+      "id": "75c483af-aed4-4d00-9717-1b8a0787b1a1",
+      "name": "Failure Reason Emission"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst data = item.json;\n\nreturn [\n  {\n    json: {\n      run_status: \"blocked\",\n      input_id: data.input_id ?? null,\n      stage: \"input_validation\",\n      blocked_result: data.blocked_result,\n      timestamp_utc: new Date().toISOString()\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        512,
+        -7360
+      ],
+      "id": "38963957-0dac-445e-9e19-aa083a78b598",
+      "name": "Emit Invalid Input Result"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [\n  {\n    json: {\n      \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n      \"$id\": \"sde.output.schema.v0_1.json\",\n      \"title\": \"Structured Discovery Engine Output Schema\",\n      \"description\": \"Output contract for Structured Discovery Engine (SDE) v0.1. Defines the structured discovery question set emitted from a validated SDE input.\",\n      \"type\": \"object\",\n      \"additionalProperties\": false,\n      \"required\": [\n        \"sde_version\",\n        \"output_id\",\n        \"source_input_id\",\n        \"question_groups\"\n      ],\n      \"properties\": {\n        \"sde_version\": {\n          \"type\": \"string\",\n          \"const\": \"v0_1\",\n          \"description\": \"Schema version for the Structured Discovery Engine output contract.\"\n        },\n        \"output_id\": {\n          \"type\": \"string\",\n          \"minLength\": 1,\n          \"description\": \"Unique identifier for the SDE output artifact.\"\n        },\n        \"source_input_id\": {\n          \"type\": \"string\",\n          \"minLength\": 1,\n          \"description\": \"Identifier of the input object from which this discovery artifact was generated.\"\n        },\n        \"question_groups\": {\n          \"type\": \"array\",\n          \"minItems\": 1,\n          \"description\": \"Structured discovery groups containing context-aware questions.\",\n          \"items\": {\n            \"type\": \"object\",\n            \"additionalProperties\": false,\n            \"required\": [\n              \"group_id\",\n              \"group_name\",\n              \"group_purpose\",\n              \"questions\"\n            ],\n            \"properties\": {\n              \"group_id\": {\n                \"type\": \"string\",\n                \"minLength\": 1,\n                \"description\": \"Unique identifier for the question group.\"\n              },\n              \"group_name\": {\n                \"type\": \"string\",\n                \"enum\": [\n                  \"GOALS\",\n                  \"SCOPE\",\n                  \"CONSTRAINTS\",\n                  \"STAKEHOLDERS\",\n                  \"DATA_AND_SYSTEMS\",\n                  \"RISKS\",\n                  \"SUCCESS_CRITERIA\",\n                  \"ASSUMPTIONS\",\n                  \"OTHER\"\n                ],\n                \"description\": \"Normalized category name for the discovery group.\"\n              },\n              \"group_purpose\": {\n                \"type\": \"string\",\n                \"minLength\": 1,\n                \"description\": \"Human-readable explanation of why this question group exists.\"\n              },\n              \"questions\": {\n                \"type\": \"array\",\n                \"minItems\": 1,\n                \"description\": \"Questions belonging to this discovery group.\",\n                \"items\": {\n                  \"type\": \"object\",\n                  \"additionalProperties\": false,\n                  \"required\": [\n                    \"question_id\",\n                    \"question_text\",\n                    \"question_intent\",\n                    \"priority\"\n                  ],\n                  \"properties\": {\n                    \"question_id\": {\n                      \"type\": \"string\",\n                      \"minLength\": 1,\n                      \"description\": \"Unique identifier for the question within the output artifact.\"\n                    },\n                    \"question_text\": {\n                      \"type\": \"string\",\n                      \"minLength\": 1,\n                      \"description\": \"The actual discovery question to ask.\"\n                    },\n                    \"question_intent\": {\n                      \"type\": \"string\",\n                      \"minLength\": 1,\n                      \"description\": \"Why the question is being asked and what ambiguity it is intended to reduce.\"\n                    },\n                    \"priority\": {\n                      \"type\": \"string\",\n                      \"enum\": [\n                        \"HIGH\",\n                        \"MEDIUM\",\n                        \"LOW\"\n                      ],\n                      \"description\": \"Relative priority of the question for ambiguity reduction.\"\n                    }\n                  }\n                }\n              }\n            }\n          }\n        },\n        \"ambiguity_flags\": {\n          \"type\": \"array\",\n          \"description\": \"Optional list of major ambiguity areas identified during discovery generation.\",\n          \"items\": {\n            \"type\": \"string\",\n            \"minLength\": 1\n          },\n          \"uniqueItems\": true\n        },\n        \"completeness_notes\": {\n          \"type\": \"array\",\n          \"description\": \"Optional notes about obvious missing context, weak areas, or likely follow-up needs.\",\n          \"items\": {\n            \"type\": \"string\",\n            \"minLength\": 1\n          }\n        }\n      }\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        288,
+        -7552
+      ],
+      "id": "68752d01-4b75-408a-a887-3b48d34e7477",
+      "name": "Load Output Schema"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare AI Generation Payload\n// Purpose:\n// Build the SDE AI generation runtime contract artifact from validated SDE input\n// and the authoritative SDE output schema.\n\nconst validatedInput = $(\"Validate Input Structure\").first().json;\nconst outputSchema = $(\"Load Output Schema\").first().json;\n\n// Safety check: only continue if validation passed\nconst validationStatus = validatedInput?.input_validation?.validation_status;\nif (validationStatus !== \"PASS\") {\n  throw new Error(\"Prepare AI Generation Payload received non-valid input. validation_status must be PASS.\");\n}\n\n// Build reduced generation-safe input.\n// Exclude runtime validation metadata from semantic input.\nconst generationInput = {\n  sde_version: validatedInput.sde_version,\n  input_id: validatedInput.input_id,\n  problem_description: validatedInput.problem_description,\n  business_context: validatedInput.business_context ?? null,\n  desired_outcome: validatedInput.desired_outcome ?? null,\n  domain: validatedInput.domain ?? null,\n  stakeholders: validatedInput.stakeholders ?? [],\n  known_constraints: validatedInput.known_constraints ?? [],\n  desired_output_type: validatedInput.desired_output_type ?? null,\n  notes: validatedInput.notes ?? null,\n  source_metadata: validatedInput.source_metadata ?? null\n};\n\n// Derive output contract from schema\nconst topLevelRequired = Array.isArray(outputSchema.required) ? outputSchema.required : [];\nconst questionGroupSchema = outputSchema?.properties?.question_groups?.items || {};\nconst questionGroupRequired = Array.isArray(questionGroupSchema.required) ? questionGroupSchema.required : [];\nconst questionSchema = questionGroupSchema?.properties?.questions?.items || {};\nconst questionRequired = Array.isArray(questionSchema.required) ? questionSchema.required : [];\n\nconst allowedGroupNames =\n  questionGroupSchema?.properties?.group_name?.enum ?? [];\n\nconst allowedPriorities =\n  questionSchema?.properties?.priority?.enum ?? [];\n\nconst questionGroupMinItems =\n  outputSchema?.properties?.question_groups?.minItems ?? 1;\n\nconst questionsMinItems =\n  questionGroupSchema?.properties?.questions?.minItems ?? 1;\n\n// Build runtime contract artifact\nconst ai_generation_payload = {\n  artifact_type: \"SDE_AI_GENERATION_PAYLOAD\",\n  artifact_version: \"v0_1\",\n  operator_id: \"uso.sde.generate_question_set\",\n  execution_mode: \"DISCOVERY_ONLY\",\n\n  validated_input: generationInput,\n\n  operator_constraints: {\n    structured_json_required: true,\n    schema_conformance_required: true,\n    grouping_required: true,\n    question_intent_required: true,\n    priority_required: true,\n    ambiguity_flags_allowed: true,\n    completeness_notes_allowed: true,\n    recommendations_allowed: false,\n    execution_planning_allowed: false,\n    implementation_steps_allowed: false,\n    prose_outside_json_allowed: false,\n    invented_facts_allowed: false\n  },\n\n  generation_objective: {\n    goal: \"REDUCE_AMBIGUITY\",\n    prefer_high_value_questions: true,\n    require_context_awareness: true,\n    require_non_generic_questions: true,\n    include_desired_outcome_clarification: true,\n    require_grouping_into_normalized_categories: true\n  },\n\n  output_contract: {\n    schema_id: outputSchema.$id ?? \"sde.output.schema.v0_1.json\",\n    schema_title: outputSchema.title ?? \"Structured Discovery Engine Output Schema\",\n    required_top_level_fields: topLevelRequired,\n    required_question_group_fields: questionGroupRequired,\n    required_question_fields: questionRequired,\n    allowed_group_names: allowedGroupNames,\n    allowed_priority_values: allowedPriorities,\n    question_group_min_items: questionGroupMinItems,\n    questions_min_items: questionsMinItems\n  }\n};\n\nreturn [\n  {\n    json: ai_generation_payload\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        512,
+        -7552
+      ],
+      "id": "4d5b8c59-ff3b-4b21-9942-438e8481d19b",
+      "name": "Prepare AI Generation Payload"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-5.4",
+          "mode": "list",
+          "cachedResultName": "gpt-5.4"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        808,
+        -7328
+      ],
+      "id": "c5f41315-4d90-440e-934b-f078b6228c4c",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "f7JbmpU0PCNzLeEU",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "=define",
+        "text": "={{\n`You are executing a bounded USO operator: SDE Generate Question Set.\n\nFollow the operator contract exactly.\nThis is a discovery-generation operation only.\nDo not exceed the operator scope.\nDo not substitute fluent completion for missing meaning.\n\n--------------------------------\n[0] ROLE AND BOUNDARY\n--------------------------------\n- You are generating a first-pass structured discovery question set for SDE.\n- You are not answering the problem.\n- You are not making recommendations.\n- You are not planning execution.\n- You are not triggering workflows.\n- You are not producing downstream follow-up logic.\n- You must remain within SDE's definition-first, execution-free boundary.\n- If meaning is missing, surface it as a question, ambiguity flag, or completeness note.\n\n--------------------------------\n[1] LAYER 1 — AVAILABILITY\n--------------------------------\nAdmitted inputs:\n- validated SDE input object\n- required fields:\n  - sde_version\n  - input_id\n  - problem_description\n- optional fields if present:\n  - business_context\n  - desired_outcome\n  - domain\n  - stakeholders\n  - known_constraints\n  - desired_output_type\n  - notes\n  - source_metadata\n\nAdmitted references:\n- normalized group names:\n  - GOALS\n  - SCOPE\n  - CONSTRAINTS\n  - STAKEHOLDERS\n  - DATA_AND_SYSTEMS\n  - RISKS\n  - SUCCESS_CRITERIA\n  - ASSUMPTIONS\n  - OTHER\n- required top-level output fields:\n  - sde_version\n  - output_id\n  - source_input_id\n  - question_groups\n- required question-group fields:\n  - group_id\n  - group_name\n  - group_purpose\n  - questions\n- required question fields:\n  - question_id\n  - question_text\n  - question_intent\n  - priority\n- allowed priority values:\n  - HIGH\n  - MEDIUM\n  - LOW\n\nYou may use only the admitted material above.\n\nDo NOT:\n- use unstated external knowledge\n- invent facts, stakeholders, systems, constraints, goals, or desired outcomes\n- assume hidden business context\n- treat likely interpretations as established facts\n\nAssumption posture:\n- assumptions are NOT allowed as output facts\n- unresolved meaning must be surfaced as questions or ambiguity markers\n\n--------------------------------\n[2] LAYER 2 — DIRECTION\n--------------------------------\nOperator task:\n- Generate a structured discovery question set from the validated SDE input\n\nRequired behavioral mode:\n- ambiguity reduction\n- context-aware question generation\n- grouped structured output\n- non-generic, high-signal discovery questioning\n\nRequired objective:\n- reduce ambiguity before downstream refinement or action\n- identify the most relevant missing information\n- clarify the requester's desired outcome where relevant\n- generate questions that materially improve definitional clarity\n- assign each question to exactly one normalized group\n- assign explainable priority\n- provide specific question intent\n\nProhibited behaviors:\n- answering the problem\n- making final recommendations\n- proposing execution plans\n- triggering workflows\n- scoring answers\n- generating generic filler questions\n- generating near-duplicate questions\n- narrowing the problem without evidence\n- converting guessed context into facts\n\nGeneration posture:\n- precise\n- bounded\n- context-aware\n- non-speculative\n- structure-first\n- ambiguity-preserving\n\n--------------------------------\n[3] LAYER 3 — STABILIZATION\n--------------------------------\nBefore finalizing output, ensure:\n\n- every question is grounded in the admitted input\n- every question belongs to exactly one normalized group\n- every emitted group contains at least one question\n- irrelevant groups are omitted\n- every emitted question group includes:\n  - group_id\n  - group_name\n  - group_purpose\n  - questions\n- every question includes:\n  - question_id\n  - question_text\n  - question_intent\n  - priority\n- group_purpose explains why the group exists\n- question_intent explains what ambiguity the question reduces\n- priority reflects ambiguity-reduction value, not rhetorical emphasis\n- the question set is context-aware rather than template-filler\n- no recommendations or execution planning are present\n- no unstated facts are asserted\n- wording variation is acceptable, but function must remain discovery-oriented\n- ambiguity is surfaced rather than smoothed over\n\nIf any condition fails:\n- revise the output to remove unsupported content\n- omit weak or redundant questions\n- do NOT fabricate context to make the output appear complete\n\n--------------------------------\n[4] OUTPUT CONTRACT\n--------------------------------\nReturn ONLY a structured JSON object with this shape:\n\n{\n  \"status\": \"ok\" | \"error\",\n  \"output\": {\n    \"sde_version\": \"v0_1\",\n    \"output_id\": \"<generated_id>\",\n    \"source_input_id\": \"<input_id>\",\n    \"question_groups\": [\n      {\n        \"group_id\": \"<generated_group_id>\",\n        \"group_name\": \"GOALS | SCOPE | CONSTRAINTS | STAKEHOLDERS | DATA_AND_SYSTEMS | RISKS | SUCCESS_CRITERIA | ASSUMPTIONS | OTHER\",\n        \"group_purpose\": \"<why this group exists>\",\n        \"questions\": [\n          {\n            \"question_id\": \"<generated_id>\",\n            \"question_text\": \"<directly answerable discovery question>\",\n            \"question_intent\": \"<specific ambiguity being reduced and why it matters>\",\n            \"priority\": \"HIGH | MEDIUM | LOW\"\n          }\n        ]\n      }\n    ],\n    \"ambiguity_flags\": [\n      \"<optional_major_unresolved_surface>\"\n    ],\n    \"completeness_notes\": [\n      \"<optional_bounded_note_about_missing_context>\"\n    ]\n  },\n  \"errors\": [],\n  \"audit\": {\n    \"operator_id\": \"uso.sde.generate_question_set\",\n    \"grouping_mode\": \"normalized_discovery_groups\",\n    \"assumption_posture\": \"no_invented_facts\",\n    \"unknown_handling\": \"surface_as_question_or_flag\"\n  }\n}\n\nRules:\n- Return JSON only\n- Do not include explanatory text outside the JSON\n- Omit optional sections if unsupported\n- Do not emit empty groups\n- Do not emit undocumented fields\n- Prefer fewer high-signal questions over many shallow questions\n\n--------------------------------\n[5] UNKNOWN / FAILURE HANDLING\n--------------------------------\nIf important meaning is missing:\n- generate discovery questions that surface the missing information\n- add ambiguity_flags only for major unresolved surfaces\n- add completeness_notes only when they are grounded and useful\n\nIf the input is too weak to produce a lawful question set without invention:\n- return status=\"error\"\n- include a structured reason in the errors array\n\nDo NOT:\n- guess missing business context\n- guess desired outcomes that are not present\n- invent system boundaries\n- assume stakeholder ownership\n- produce filler questions just to appear thorough\n- fabricate completeness\n\nExecution artifact:\n${JSON.stringify($json, null, 2)}`\n}}",
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        736,
+        -7552
+      ],
+      "id": "54f05620-43a6-4e2c-bb32-28a910494d09",
+      "name": "AI Generate Question Set"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst raw = item.json?.text;\n\n// Basic presence/type check\nif (typeof raw !== \"string\" || raw.trim().length === 0) {\n  throw new Error(\"Parse AI Output: expected a non-empty string in item.json.text\");\n}\n\nlet cleaned = raw.trim();\n\n// Remove markdown fences if the model ever returns them\nif (cleaned.startsWith(\"```\")) {\n  cleaned = cleaned\n    .replace(/^```json\\s*/i, \"\")\n    .replace(/^```\\s*/i, \"\")\n    .replace(/\\s*```$/, \"\")\n    .trim();\n}\n\nlet parsed;\n\ntry {\n  parsed = JSON.parse(cleaned);\n} catch (err) {\n  throw new Error(\n    `Parse AI Output: failed to parse model output as JSON. ${err.message}`\n  );\n}\n\n// Ensure top-level parsed value is an object\nif (parsed === null || Array.isArray(parsed) || typeof parsed !== \"object\") {\n  throw new Error(\"Parse AI Output: parsed JSON must be a top-level object\");\n}\n\n// Emit the parsed object directly\nreturn [\n  {\n    json: parsed\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1088,
+        -7552
+      ],
+      "id": "1917d9e6-9ba8-43f9-848a-1bcf44f7049d",
+      "name": "Parse AI Output"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pull parsed AI response envelope from prior node\nconst parsedResponse = $(\"Parse AI Output\").first().json;\n\n// Pull output schema artifact from prior node\nconst schema = $(\"Load Output Schema\").first().json;\n\nconst outputData = parsedResponse?.output;\n\nif (!outputData || typeof outputData !== \"object\" || Array.isArray(outputData)) {\n  throw new Error(\"Validate Output Structure: parsedResponse.output must be a top-level object\");\n}\n\nif (!schema || typeof schema !== \"object\" || Array.isArray(schema)) {\n  throw new Error(\"Validate Output Structure: schema must be a top-level object\");\n}\n\nconst errors = [];\n\n// --- Helpers ---\nfunction detectType(value) {\n  if (Array.isArray(value)) return \"array\";\n  if (value === null) return \"null\";\n  return typeof value;\n}\n\nfunction addError(code, field, message, extra = {}) {\n  errors.push({\n    code,\n    field,\n    message,\n    ...extra\n  });\n}\n\nfunction pathJoin(base, key) {\n  if (base === \"\") return key;\n  if (String(key).startsWith(\"[\")) return `${base}${key}`;\n  return `${base}.${key}`;\n}\n\nfunction validateAgainstSchema(value, schemaNode, path = \"\") {\n  if (!schemaNode || typeof schemaNode !== \"object\") {\n    return;\n  }\n\n  if (schemaNode.type) {\n    const actualType = detectType(value);\n\n    if (schemaNode.type === \"object\") {\n      if (actualType !== \"object\") {\n        addError(\n          \"INVALID_TYPE\",\n          path || \"(root)\",\n          `${path || \"output\"} must be an object`,\n          { expected_type: \"object\", actual_type: actualType }\n        );\n        return;\n      }\n    } else if (schemaNode.type === \"array\") {\n      if (actualType !== \"array\") {\n        addError(\n          \"INVALID_TYPE\",\n          path || \"(root)\",\n          `${path || \"output\"} must be an array`,\n          { expected_type: \"array\", actual_type: actualType }\n        );\n        return;\n      }\n    } else {\n      if (actualType !== schemaNode.type) {\n        addError(\n          \"INVALID_TYPE\",\n          path || \"(root)\",\n          `${path || \"value\"} must be of type ${schemaNode.type}`,\n          { expected_type: schemaNode.type, actual_type: actualType }\n        );\n        return;\n      }\n    }\n  }\n\n  if (\"const\" in schemaNode) {\n    if (value !== schemaNode.const) {\n      addError(\n        \"INVALID_LITERAL_VALUE\",\n        path || \"(root)\",\n        `${path || \"value\"} must be exactly '${schemaNode.const}'`,\n        { expected: schemaNode.const, actual: value }\n      );\n    }\n  }\n\n  if (Array.isArray(schemaNode.enum)) {\n    if (!schemaNode.enum.includes(value)) {\n      addError(\n        \"INVALID_ENUM_VALUE\",\n        path || \"(root)\",\n        `${path || \"value\"} must be one of: ${schemaNode.enum.join(\", \")}`,\n        { allowed_values: schemaNode.enum, actual: value }\n      );\n    }\n  }\n\n  if (schemaNode.type === \"string\") {\n    if (\"minLength\" in schemaNode && typeof value === \"string\") {\n      if (value.length < schemaNode.minLength) {\n        addError(\n          \"MIN_LENGTH_VIOLATION\",\n          path || \"(root)\",\n          `${path || \"value\"} must be at least ${schemaNode.minLength} characters long`,\n          { min_length: schemaNode.minLength, actual_length: value.length }\n        );\n      }\n    }\n  }\n\n  if (schemaNode.type === \"array\" && Array.isArray(value)) {\n    if (\"minItems\" in schemaNode && value.length < schemaNode.minItems) {\n      addError(\n        \"MIN_ITEMS_VIOLATION\",\n        path || \"(root)\",\n        `${path || \"array\"} must contain at least ${schemaNode.minItems} items`,\n        { min_items: schemaNode.minItems, actual_count: value.length }\n      );\n    }\n\n    if (schemaNode.uniqueItems === true) {\n      const seen = new Set();\n      for (let i = 0; i < value.length; i++) {\n        const itemKey = JSON.stringify(value[i]);\n        if (seen.has(itemKey)) {\n          addError(\n            \"DUPLICATE_ARRAY_ITEM\",\n            `${path}[${i}]`,\n            `${path}[${i}] must be unique`,\n            { actual_value: value[i] }\n          );\n        } else {\n          seen.add(itemKey);\n        }\n      }\n    }\n\n    if (schemaNode.items) {\n      for (let i = 0; i < value.length; i++) {\n        validateAgainstSchema(value[i], schemaNode.items, `${path}[${i}]`);\n      }\n    }\n  }\n\n  if (schemaNode.type === \"object\" && value && typeof value === \"object\" && !Array.isArray(value)) {\n    const props = schemaNode.properties || {};\n    const required = Array.isArray(schemaNode.required) ? schemaNode.required : [];\n\n    for (const reqField of required) {\n      if (!(reqField in value)) {\n        addError(\n          \"MISSING_REQUIRED_FIELD\",\n          path ? pathJoin(path, reqField) : reqField,\n          `Missing required field: ${path ? pathJoin(path, reqField) : reqField}`\n        );\n      }\n    }\n\n    if (schemaNode.additionalProperties === false) {\n      for (const key of Object.keys(value)) {\n        if (!(key in props)) {\n          addError(\n            \"UNEXPECTED_FIELD\",\n            path ? pathJoin(path, key) : key,\n            `Unexpected field not allowed by schema: ${path ? pathJoin(path, key) : key}`,\n            { actual_key: key }\n          );\n        }\n      }\n    }\n\n    for (const [key, propSchema] of Object.entries(props)) {\n      if (key in value) {\n        validateAgainstSchema(value[key], propSchema, path ? pathJoin(path, key) : key);\n      }\n    }\n  }\n}\n\n// --- Run validation ---\nvalidateAgainstSchema(outputData, schema, \"\");\n\n// --- Final status ---\nconst validation_status = errors.length === 0 ? \"PASS\" : \"FAIL\";\n\n// Emit original parsed response envelope plus validation result\nreturn [\n  {\n    json: {\n      ...parsedResponse,\n      output_validation: {\n        validation_status,\n        error_count: errors.length,\n        errors\n      }\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1312,
+        -7552
+      ],
+      "id": "4502b2f0-8ba4-43ce-bb99-fa8e3ccfc02f",
+      "name": "Validate Output Structure"
+    },
+    {
+      "parameters": {
+        "jsCode": "const actualArtifact = $input.first().json;\n\nconst expectedFixture = {\n  sde_version: \"v0_1\",\n  output_id: \"F01_OUT\",\n  source_input_id: \"F01\",\n  question_groups: [\n    {\n      group_id: \"G01\",\n      group_name: \"GOALS\",\n      group_purpose: \"Clarify the primary objective of the assistant and distinguish immediate value from later ambitions.\",\n      questions: [\n        {\n          question_id: \"Q01\",\n          question_text: \"What is the single most important outcome you want the first version of this assistant to achieve for the operations team?\",\n          question_intent: \"Reduces primary-objective ambiguity by forcing prioritization of the initial business goal.\",\n          priority: \"HIGH\"\n        },\n        {\n          question_id: \"Q02\",\n          question_text: \"Is the first version intended mainly to answer SOP questions, reduce response time, reduce staff workload, or improve consistency of internal guidance?\",\n          question_intent: \"Clarifies which success dimension matters most so downstream design is not based on a vague improvement goal.\",\n          priority: \"HIGH\"\n        }\n      ]\n    },\n    {\n      group_id: \"G02\",\n      group_name: \"SCOPE\",\n      group_purpose: \"Separate the initial advisory phase from possible future automation and define what is in or out of scope.\",\n      questions: [\n        {\n          question_id: \"Q03\",\n          question_text: \"For phase one, should the assistant be limited to answering questions only, with no ability to create or modify tickets?\",\n          question_intent: \"Resolves phase-one execution-scope ambiguity and prevents advisory and action-taking behavior from being mixed too early.\",\n          priority: \"HIGH\"\n        },\n        {\n          question_id: \"Q04\",\n          question_text: \"Is automatic maintenance ticket creation a future possibility only, or is it expected to be part of the near-term rollout plan?\",\n          question_intent: \"Clarifies whether ticket automation is strategic future scope or an immediate design requirement.\",\n          priority: \"HIGH\"\n        },\n        {\n          question_id: \"Q05\",\n          question_text: \"Which types of SOP questions should the assistant be allowed to answer in the first release, and which topics should remain out of scope?\",\n          question_intent: \"Defines content boundaries so the assistant is not assumed to cover all operational knowledge areas by default.\",\n          priority: \"MEDIUM\"\n        }\n      ]\n    },\n    {\n      group_id: \"G03\",\n      group_name: \"CONSTRAINTS\",\n      group_purpose: \"Surface practical and policy limits that should shape the first version of the assistant.\",\n      questions: [\n        {\n          question_id: \"Q06\",\n          question_text: \"Are there compliance, policy, security, or internal governance rules that would limit what this assistant can access or do?\",\n          question_intent: \"Surfaces formal restrictions that may block certain capabilities before solution design begins.\",\n          priority: \"HIGH\"\n        },\n        {\n          question_id: \"Q07\",\n          question_text: \"Does the organization require human approval before any AI-generated action can affect an operational system or maintenance workflow?\",\n          question_intent: \"Clarifies approval constraints and whether action-taking behavior must always remain gated by a human.\",\n          priority: \"HIGH\"\n        },\n        {\n          question_id: \"Q08\",\n          question_text: \"Is there a preferred rollout constraint such as internal-only access, limited pilot users, or read-only behavior for the first release?\",\n          question_intent: \"Identifies rollout-limiting constraints that define the safe boundary of the first deployment.\",\n          priority: \"MEDIUM\"\n        }\n      ]\n    },\n    {\n      group_id: \"G04\",\n      group_name: \"STAKEHOLDERS\",\n      group_purpose: \"Identify ownership, operating roles, and approval authorities.\",\n      questions: [\n        {\n          question_id: \"Q09\",\n          question_text: \"Who owns this initiative and will decide what the assistant is officially allowed to answer or do?\",\n          question_intent: \"Resolves ownership ambiguity and identifies the authority responsible for scope and governance decisions.\",\n          priority: \"HIGH\"\n        },\n        {\n          question_id: \"Q10\",\n          question_text: \"Who will be responsible for maintaining the SOP content or source material the assistant relies on?\",\n          question_intent: \"Clarifies content stewardship and prevents the assistant from being designed without a content-maintenance owner.\",\n          priority: \"MEDIUM\"\n        },\n        {\n          question_id: \"Q11\",\n          question_text: \"If ticket automation is later introduced, who must approve, monitor, or audit those actions?\",\n          question_intent: \"Surfaces stakeholder and governance roles needed before execution-capable features can be considered.\",\n          priority: \"HIGH\"\n        }\n      ]\n    },\n    {\n      group_id: \"G05\",\n      group_name: \"DATA_AND_SYSTEMS\",\n      group_purpose: \"Determine what sources, systems, and access boundaries are relevant to the assistant.\",\n      questions: [\n        {\n          question_id: \"Q12\",\n          question_text: \"What sources should the assistant use to answer SOP questions in the first version, such as SOP documents, internal knowledge bases, or shared documentation?\",\n          question_intent: \"Clarifies the knowledge-source boundary so the assistant is tied to real source material rather than assumed general knowledge.\",\n          priority: \"HIGH\"\n        },\n        {\n          question_id: \"Q13\",\n          question_text: \"Which operational systems, if any, should the assistant be allowed to read from in phase one?\",\n          question_intent: \"Defines read-access boundaries and prevents hidden assumptions about system connectivity.\",\n          priority: \"HIGH\"\n        },\n        {\n          question_id: \"Q14\",\n          question_text: \"If ticket creation becomes part of a later phase, which maintenance or ticketing system would be the target system of record?\",\n          question_intent: \"Resolves future system-target ambiguity and makes later automation discussions concrete.\",\n          priority: \"MEDIUM\"\n        }\n      ]\n    },\n    {\n      group_id: \"G06\",\n      group_name: \"RISKS\",\n      group_purpose: \"Expose the main failure concerns and unacceptable outcomes associated with the assistant.\",\n      questions: [\n        {\n          question_id: \"Q15\",\n          question_text: \"What is the biggest risk if the assistant gives an incorrect SOP answer to an operations user?\",\n          question_intent: \"Clarifies the practical consequence of advisory failure so risk posture can be sized correctly.\",\n          priority: \"HIGH\"\n        },\n        {\n          question_id: \"Q16\",\n          question_text: \"What is the biggest risk if the assistant ever creates a maintenance ticket incorrectly or at the wrong time?\",\n          question_intent: \"Surfaces execution-risk consequences and distinguishes automation risk from advisory risk.\",\n          priority: \"HIGH\"\n        },\n        {\n          question_id: \"Q17\",\n          question_text: \"Are there any categories of operational guidance or actions that would be unacceptable for the assistant to handle under any circumstance?\",\n          question_intent: \"Defines hard risk boundaries and forbidden areas early.\",\n          priority: \"MEDIUM\"\n        }\n      ]\n    },\n    {\n      group_id: \"G07\",\n      group_name: \"SUCCESS_CRITERIA\",\n      group_purpose: \"Define how the first version would be judged successful or unsuccessful.\",\n      questions: [\n        {\n          question_id: \"Q18\",\n          question_text: \"How will you measure whether the first version of the assistant is successful?\",\n          question_intent: \"Forces explicit success criteria rather than leaving value undefined.\",\n          priority: \"HIGH\"\n        },\n        {\n          question_id: \"Q19\",\n          question_text: \"What would convince you that the assistant is useful enough to justify a second phase such as deeper system access or ticket automation?\",\n          question_intent: \"Defines the decision threshold for expansion into higher-risk capabilities.\",\n          priority: \"MEDIUM\"\n        }\n      ]\n    },\n    {\n      group_id: \"G08\",\n      group_name: \"ASSUMPTIONS\",\n      group_purpose: \"Surface assumptions that are currently implied but not yet confirmed.\",\n      questions: [\n        {\n          question_id: \"Q20\",\n          question_text: \"Are you assuming that the same assistant should handle both knowledge support and operational action-taking, or could those need to remain separate capabilities?\",\n          question_intent: \"Challenges an unstated architectural assumption that advisory and execution functions belong in one system.\",\n          priority: \"HIGH\"\n        },\n        {\n          question_id: \"Q21\",\n          question_text: \"Are you assuming that approval requirements can be decided later, or do they need to be defined before the first version is scoped?\",\n          question_intent: \"Surfaces whether governance is being postponed in a way that could distort the initial design.\",\n          priority: \"MEDIUM\"\n        }\n      ]\n    }\n  ],\n  ambiguity_flags: [\n    \"UNCLEAR_PRIMARY_OBJECTIVE\",\n    \"UNDEFINED_PHASE_ONE_SCOPE\",\n    \"UNKNOWN_SYSTEM_BOUNDARY\",\n    \"UNDEFINED_APPROVAL_MODEL\",\n    \"MISSING_SUCCESS_CRITERIA\",\n    \"BLENDED_ADVISORY_AND_EXECUTION_INTENT\"\n  ],\n  completeness_notes: [\n    \"The input clearly describes interest in AI assistance but does not yet define the primary first-phase objective tightly enough for downstream planning.\",\n    \"The request blends advisory behavior and possible future execution behavior, which should be separated explicitly before implementation decisions are made.\",\n    \"System-access boundaries and approval requirements are not yet defined and are likely to be critical constraints for any later automation capability.\"\n  ]\n};\n\nreturn [\n  {\n    json: {\n      comparison_subject: actualArtifact,\n      expected_fixture: expectedFixture,\n      fixture_metadata: {\n        fixture_id: \"F01_OUT\",\n        fixture_version: \"v0_1\",\n        fixture_type: \"SDE_EXPECTED_OUTPUT\"\n      }\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        -7936
+      ],
+      "id": "b35b1934-9a1a-409e-95d6-8f7bc047b9ab",
+      "name": "Load Expected Output Fixture"
+    },
+    {
+      "parameters": {
+        "jsCode": "const artifact = $(\"Prepare Output Artifact\").first().json;\nconst comparison = $(\"Compare to Expected Output\").first().json;\n\nconst outputValidation = artifact.output_validation || {};\nconst outputValidationStatus = outputValidation.validation_status || \"UNKNOWN\";\n\nconst comparisonStatus = comparison.comparison_status || \"UNKNOWN\";\nconst comparisonNotes = Array.isArray(comparison.comparison_notes) ? comparison.comparison_notes : [];\nconst comparisonErrors = Array.isArray(comparison.comparison_errors) ? comparison.comparison_errors : [];\n\nlet run_status = \"UNKNOWN\";\nlet run_summary = \"\";\n\n// Resolve final run status\nif (outputValidationStatus !== \"PASS\") {\n  run_status = \"FAIL\";\n  run_summary = \"Run failed because generated output did not pass output schema validation.\";\n} else if (comparisonStatus !== \"PASS\") {\n  run_status = \"FAIL\";\n  run_summary = \"Run failed because generated output did not pass comparison checks against the expected fixture.\";\n} else if (comparisonNotes.length > 0) {\n  run_status = \"PASS_WITH_NOTES\";\n  run_summary = \"Run passed core validation and comparison checks, but non-blocking comparison notes were recorded.\";\n} else {\n  run_status = \"PASS\";\n  run_summary = \"Run passed output validation and comparison checks.\";\n}\n\nreturn [\n  {\n    json: {\n      run_status,\n      run_summary,\n\n      source_input_id:\n        artifact?.artifact_metadata?.source_input_id ??\n        comparison?.actual_source_input_id ??\n        null,\n\n      output_id:\n        artifact?.artifact_metadata?.output_id ??\n        comparison?.actual_output_id ??\n        null,\n\n      fixture_id: comparison?.fixture_id ?? null,\n\n      resolution_detail: {\n        output_validation_status: outputValidationStatus,\n        comparison_status: comparisonStatus,\n        comparison_note_count: comparisonNotes.length,\n        comparison_error_count: comparisonErrors.length\n      },\n\n      output_validation: outputValidation,\n      comparison_result: comparison\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2208,
+        -7936
+      ],
+      "id": "821dae73-5877-4122-8b82-18d036efb5ae",
+      "name": "Resolve Run Status"
+    },
+    {
+      "parameters": {
+        "jsCode": "const resolution = $(\"Resolve Run Status\").first().json;\n\nreturn [\n  {\n    json: {\n      artifact_type: \"SDE_INTERNAL_DIAGNOSTIC_RUN_RESULT\",\n      artifact_version: \"v0_1\",\n\n      run_status: resolution.run_status,\n      run_summary: resolution.run_summary,\n      source_input_id: resolution.source_input_id ?? null,\n      output_id: resolution.output_id ?? null,\n      fixture_id: resolution.fixture_id ?? null,\n      emitted_at_utc: new Date().toISOString(),\n\n      resolution_detail: resolution.resolution_detail ?? {},\n      output_validation: resolution.output_validation ?? {},\n      comparison_result: resolution.comparison_result ?? {}\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2656,
+        -7840
+      ],
+      "id": "c227d4cc-8558-4342-b76e-13584ada9d5f",
+      "name": "Emit Run Result"
+    },
+    {
+      "parameters": {
+        "jsCode": "const artifact = $(\"Prepare Output Artifact\").first().json;\n\n// Prefer validated output when available\nconst generated = artifact.validated_output || artifact.response_envelope?.output || {};\n\nconst questionGroups = Array.isArray(generated.question_groups) ? generated.question_groups : [];\nconst ambiguityFlags = Array.isArray(generated.ambiguity_flags) ? generated.ambiguity_flags : [];\nconst completenessNotes = Array.isArray(generated.completeness_notes) ? generated.completeness_notes : [];\n\n// ---------------------------------\n// Customer-facing rule\n// HIGH priority questions only\n// ---------------------------------\nlet runningQuestionNumber = 1;\n\nconst highPriorityGroups = questionGroups\n  .map((group, groupIndex) => {\n    const questions = Array.isArray(group.questions) ? group.questions : [];\n\n    const highPriorityQuestions = questions\n      .filter((q) => (q.priority || \"\").toUpperCase() === \"HIGH\")\n      .map((q, questionIndex) => {\n        const numberedQuestion = {\n          question_id: q.question_id || null,\n          question_text: q.question_text || \"\",\n          priority: q.priority || \"HIGH\",\n\n          // Render helpers\n          question_number_global: runningQuestionNumber,\n          question_number_in_group: questionIndex + 1\n        };\n\n        runningQuestionNumber += 1;\n        return numberedQuestion;\n      });\n\n    return {\n      group_id: group.group_id || null,\n      group_name: group.group_name || \"UNKNOWN\",\n      group_label: toCustomerFacingLabel(group.group_name || \"UNKNOWN\"),\n\n      // Keep for optional render use, but customer render can omit if desired\n      group_purpose: group.group_purpose || null,\n\n      // Render helpers\n      group_order: groupIndex + 1,\n\n      questions: highPriorityQuestions\n    };\n  })\n  .filter((group) => group.questions.length > 0);\n\nconst totalHighPriorityQuestionCount = highPriorityGroups.reduce(\n  (sum, group) => sum + group.questions.length,\n  0\n);\n\n// Optional quick-review slice for future render modes\nconst topPriorityQuestions = highPriorityGroups\n  .flatMap((group) =>\n    group.questions.map((q) => ({\n      group_label: group.group_label,\n      question_id: q.question_id,\n      question_text: q.question_text,\n      question_number_global: q.question_number_global\n    }))\n  )\n  .slice(0, 8);\n\nconst customerFacingOutput = {\n  artifact_type: \"SDE_CUSTOMER_OUTPUT\",\n  artifact_version: \"v0_1\",\n\n  artifact_title: \"AI Workflow Discovery Review\",\n  artifact_subtitle: \"Customer-Facing Clarification Output\",\n  review_status: \"ready_for_review\",\n\n  source_input_id:\n    artifact.artifact_metadata?.source_input_id ??\n    generated.source_input_id ??\n    null,\n\n  output_id:\n    artifact.artifact_metadata?.output_id ??\n    generated.output_id ??\n    null,\n\n  artifact_summary: {\n    question_group_count: highPriorityGroups.length,\n    total_high_priority_question_count: totalHighPriorityQuestionCount,\n    summary_text:\n      \"This review highlights the most important questions that should be clarified before an AI workflow is scoped, designed, or built.\"\n  },\n\n  presentation_notes: {\n    intended_use:\n      \"Use this review to align stakeholders on the most important open questions before any downstream workflow design or implementation begins.\",\n    non_goal:\n      \"This artifact is not a recommendation, implementation plan, or execution decision.\",\n    posture:\n      \"Answer the questions below to clarify goals, scope, constraints, ownership, risk boundaries, and success criteria.\"\n  },\n\n  priority_rule: \"HIGH_ONLY\",\n\n  // Useful later if you want a shorter founder/executive render\n  quick_review: {\n    enabled: true,\n    top_question_count: topPriorityQuestions.length,\n    top_questions: topPriorityQuestions\n  },\n\n  question_groups: highPriorityGroups,\n  ambiguity_flags: ambiguityFlags,\n  completeness_notes: completenessNotes\n};\n\nreturn [\n  {\n    json: customerFacingOutput\n  }\n];\n\n// ----------------------------\n// Helpers\n// ----------------------------\nfunction toCustomerFacingLabel(groupName) {\n  const normalized = String(groupName || \"\").toUpperCase();\n\n  const labelMap = {\n    GOALS: \"Goals to Clarify\",\n    SCOPE: \"Scope Decisions\",\n    CONSTRAINTS: \"Constraints to Define\",\n    STAKEHOLDERS: \"Who Needs to Be Involved\",\n    DATA_AND_SYSTEMS: \"Current Tools and Information Sources\",\n    RISKS: \"Risk Boundaries\",\n    SUCCESS_CRITERIA: \"How Success Should Be Measured\",\n    ASSUMPTIONS: \"Assumptions to Test\"\n  };\n\n  return labelMap[normalized] || groupName;\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        -7632
+      ],
+      "id": "b96073fb-bdc7-4d0c-a520-bdf5ef5f7693",
+      "name": "Prepare Customer-Facing SDE Output"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $(\"Prepare Customer-Facing SDE Output\").first().json;\n\nconst title = data.artifact_title || \"AI Workflow Discovery Review\";\nconst subtitle = data.artifact_subtitle || \"\";\nconst reviewStatus = data.review_status || \"ready_for_review\";\nconst sourceInputId = data.source_input_id || \"\";\nconst outputId = data.output_id || \"\";\n\nconst summary = data.artifact_summary || {};\nconst notes = data.presentation_notes || {};\nconst groups = Array.isArray(data.question_groups) ? data.question_groups : [];\nconst ambiguityFlags = Array.isArray(data.ambiguity_flags) ? data.ambiguity_flags : [];\nconst completenessNotes = Array.isArray(data.completeness_notes) ? data.completeness_notes : [];\nconst quickReview = data.quick_review || {};\n\n// Customer-facing render rule\nconst SHOW_GROUP_PURPOSE = false;\nconst SHOW_QUICK_REVIEW = false;\n\nconst lines = [];\n\n// Header\nlines.push(`# ${title}`);\nlines.push(\"\");\n\nif (subtitle) {\n  lines.push(`_${subtitle}_`);\n  lines.push(\"\");\n}\n\n// Metadata\nlines.push(`**Source Input ID:** ${sourceInputId || \"N/A\"}  `);\nlines.push(`**Output ID:** ${outputId || \"N/A\"}  `);\nlines.push(`**Review Status:** ${reviewStatus}`);\nlines.push(\"\");\n\n// Summary\nlines.push(\"## Summary\");\nlines.push(\"\");\nlines.push(\n  summary.summary_text ||\n    \"This review highlights the most important questions that should be clarified before an AI workflow is scoped, designed, or built.\"\n);\nlines.push(\"\");\nlines.push(`- **Clarification Areas:** ${summary.question_group_count ?? 0}`);\nlines.push(`- **High-Priority Questions:** ${summary.total_high_priority_question_count ?? 0}`);\nlines.push(\"\");\n\n// Intended use\nlines.push(\"## Intended Use\");\nlines.push(\"\");\nlines.push(\n  notes.intended_use ||\n    \"Use this review to align stakeholders on the most important open questions before any downstream workflow design or implementation begins.\"\n);\nlines.push(\"\");\n\n// Non-goal\nlines.push(\"## Non-Goal\");\nlines.push(\"\");\nlines.push(\n  notes.non_goal ||\n    \"This artifact is not a recommendation, implementation plan, or execution decision.\"\n);\nlines.push(\"\");\n\n// Review guidance\nlines.push(\"## Review Guidance\");\nlines.push(\"\");\nlines.push(\n  notes.posture ||\n    \"Answer the questions below to clarify goals, scope, constraints, ownership, risk boundaries, and success criteria.\"\n);\nlines.push(\"\");\n\n// Optional quick review block\nif (SHOW_QUICK_REVIEW && quickReview.enabled && Array.isArray(quickReview.top_questions) && quickReview.top_questions.length > 0) {\n  lines.push(\"\");\n  lines.push(\"---\");\n  lines.push(\"\");\n  lines.push(\"## Quick Review\");\n  lines.push(\"\");\n  lines.push(\"These are the first questions to review if you want a shorter starting pass.\");\n  lines.push(\"\");\n\n  quickReview.top_questions.forEach((q) => {\n    lines.push(`${q.question_number_global}. ${q.question_text}`);\n    if (q.group_label) {\n      lines.push(`   - **Area:** ${q.group_label}`);\n    }\n    lines.push(\"\");\n  });\n}\n\n// Question groups\nfor (const group of groups) {\n  const sectionTitle = group.group_label || group.group_name || \"Other Discovery Questions\";\n  const questions = Array.isArray(group.questions) ? group.questions : [];\n\n  if (questions.length === 0) continue;\n\n  lines.push(\"---\");\n  lines.push(\"\");\n  lines.push(`## ${sectionTitle}`);\n  lines.push(\"\");\n\n  if (SHOW_GROUP_PURPOSE && group.group_purpose) {\n    lines.push(`${group.group_purpose}`);\n    lines.push(\"\");\n  }\n\n  questions.forEach((q) => {\n    const number = q.question_number_global ?? q.question_number_in_group ?? null;\n\n    if (number !== null) {\n      lines.push(`${number}. ${q.question_text}`);\n    } else {\n      lines.push(`- ${q.question_text}`);\n    }\n\n    lines.push(\"\");\n  });\n}\n\n// Optional sections\nif (ambiguityFlags.length > 0) {\n  lines.push(\"---\");\n  lines.push(\"\");\n  lines.push(\"## Identified Ambiguities\");\n  lines.push(\"\");\n\n  ambiguityFlags.forEach((flag) => {\n    lines.push(`- ${flag}`);\n  });\n\n  lines.push(\"\");\n}\n\nif (completenessNotes.length > 0) {\n  lines.push(\"---\");\n  lines.push(\"\");\n  lines.push(\"## Completeness Notes\");\n  lines.push(\"\");\n\n  completenessNotes.forEach((note) => {\n    lines.push(`- ${note}`);\n  });\n\n  lines.push(\"\");\n}\n\nconst markdownContent = lines.join(\"\\n\");\n\nreturn [\n  {\n    json: {\n      filename: `${sourceInputId || \"SDE\"}_customer_discovery_review.md`,\n      markdown_content: markdownContent\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1984,
+        -7744
+      ],
+      "id": "060cd4bf-1720-4c0a-a4cc-d7c44b6eede8",
+      "name": "Render Customer SDE Output (Markdown)"
+    },
+    {
+      "parameters": {
+        "operation": "toText",
+        "sourceProperty": "markdown_content",
+        "options": {
+          "fileName": "={{$json.filename}}"
+        }
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        2208,
+        -7744
+      ],
+      "id": "9732813b-6c81-40bd-9743-425f3bb6e0d4",
+      "name": "Convert to Markdown"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $(\"Prepare Customer-Facing SDE Output\").first().json;\n\nconst title = data.artifact_title || \"AI Workflow Discovery Review\";\nconst subtitle = data.artifact_subtitle || \"\";\nconst reviewStatus = data.review_status || \"ready_for_review\";\nconst sourceInputId = data.source_input_id || \"\";\nconst outputId = data.output_id || \"\";\n\nconst summary = data.artifact_summary || {};\nconst notes = data.presentation_notes || {};\nconst groups = Array.isArray(data.question_groups) ? data.question_groups : [];\nconst ambiguityFlags = Array.isArray(data.ambiguity_flags) ? data.ambiguity_flags : [];\nconst completenessNotes = Array.isArray(data.completeness_notes) ? data.completeness_notes : [];\nconst quickReview = data.quick_review || {};\n\n// Customer-facing render rule\nconst SHOW_GROUP_PURPOSE = false;\nconst SHOW_QUICK_REVIEW = false;\n\nfunction esc(text) {\n  if (text === null || text === undefined) return \"\";\n  return String(text)\n    .replace(/\\\\/g, \"\\\\textbackslash{}\")\n    .replace(/&/g, \"\\\\&\")\n    .replace(/%/g, \"\\\\%\")\n    .replace(/\\$/g, \"\\\\$\")\n    .replace(/#/g, \"\\\\#\")\n    .replace(/_/g, \"\\\\_\")\n    .replace(/{/g, \"\\\\{\")\n    .replace(/}/g, \"\\\\}\")\n    .replace(/~/g, \"\\\\textasciitilde{}\")\n    .replace(/\\^/g, \"\\\\textasciicircum{}\");\n}\n\n// Only convert single-quoted phrases into proper LaTeX quotes.\n// Example: 'trusted' -> \\enquote{trusted}\n// Leaves everything else alone.\nfunction escWithSmartQuotes(text) {\n  const escaped = esc(text);\n  return escaped.replace(/'([^']+)'/g, \"\\\\enquote{$1}\");\n}\n\nlet tex = \"\";\n\ntex += `\\\\documentclass[11pt]{article}\\n`;\ntex += `\\\\usepackage[margin=1in]{geometry}\\n`;\ntex += `\\\\usepackage[T1]{fontenc}\\n`;\ntex += `\\\\usepackage[utf8]{inputenc}\\n`;\ntex += `\\\\usepackage{lmodern}\\n`;\ntex += `\\\\usepackage{enumitem}\\n`;\ntex += `\\\\usepackage{hyperref}\\n`;\ntex += `\\\\usepackage{xcolor}\\n`;\ntex += `\\\\usepackage{csquotes}\\n`;\ntex += `\\\\setlist[itemize]{topsep=4pt,itemsep=4pt}\\n`;\ntex += `\\\\setlist[enumerate]{topsep=4pt,itemsep=8pt}\\n`;\ntex += `\\\\begin{document}\\n\\n`;\n\ntex += `\\\\begin{center}\\n`;\ntex += `{\\\\LARGE \\\\textbf{${escWithSmartQuotes(title)}}}\\\\\\\\[6pt]\\n`;\nif (subtitle) {\n  tex += `{\\\\large \\\\textit{${escWithSmartQuotes(subtitle)}}}\\\\\\\\[8pt]\\n`;\n}\ntex += `\\\\end{center}\\n\\n`;\n\ntex += `\\\\noindent\\\\textbf{Source Input ID:} ${escWithSmartQuotes(sourceInputId || \"N/A\")}\\\\\\\\\\n`;\ntex += `\\\\textbf{Output ID:} ${escWithSmartQuotes(outputId || \"N/A\")}\\\\\\\\\\n`;\ntex += `\\\\textbf{Review Status:} ${escWithSmartQuotes(toReviewStatusLabel(reviewStatus))}\\n\\n`;\n\ntex += `\\\\section*{Summary}\\n`;\ntex += `${escWithSmartQuotes(\n  summary.summary_text ||\n    \"This review highlights the most important questions that should be clarified before an AI workflow is scoped, designed, or built.\"\n)}\\n\\n`;\n\ntex += `\\\\begin{itemize}\\n`;\ntex += `\\\\item \\\\textbf{Clarification Areas:} ${escWithSmartQuotes(summary.question_group_count ?? 0)}\\n`;\ntex += `\\\\item \\\\textbf{High-Priority Questions:} ${escWithSmartQuotes(summary.total_high_priority_question_count ?? 0)}\\n`;\ntex += `\\\\end{itemize}\\n\\n`;\n\ntex += `\\\\section*{Intended Use}\\n`;\ntex += `${escWithSmartQuotes(\n  notes.intended_use ||\n    \"Use this review to align stakeholders on the most important open questions before any downstream workflow design or implementation begins.\"\n)}\\n\\n`;\n\ntex += `\\\\section*{Non-Goal}\\n`;\ntex += `${escWithSmartQuotes(\n  notes.non_goal ||\n    \"This artifact is not a recommendation, implementation plan, or execution decision.\"\n)}\\n\\n`;\n\ntex += `\\\\section*{Review Guidance}\\n`;\ntex += `${escWithSmartQuotes(\n  notes.posture ||\n    \"Answer the questions below to clarify goals, scope, constraints, ownership, risk boundaries, and success criteria.\"\n)}\\n\\n`;\n\nif (\n  SHOW_QUICK_REVIEW &&\n  quickReview.enabled &&\n  Array.isArray(quickReview.top_questions) &&\n  quickReview.top_questions.length > 0\n) {\n  tex += `\\\\section*{Quick Review}\\n`;\n  tex += `These are the first questions to review if you want a shorter starting pass.\\n\\n`;\n  tex += `\\\\begin{enumerate}\\n`;\n  for (const q of quickReview.top_questions) {\n    tex += `\\\\item ${escWithSmartQuotes(q.question_text)}\\n`;\n    if (q.group_label) {\n      tex += `\\\\begin{itemize}\\n`;\n      tex += `\\\\item \\\\textbf{Area:} ${escWithSmartQuotes(q.group_label)}\\n`;\n      tex += `\\\\end{itemize}\\n`;\n    }\n  }\n  tex += `\\\\end{enumerate}\\n\\n`;\n}\n\nfor (const group of groups) {\n  const sectionTitle = group.group_label || group.group_name || \"Other Discovery Questions\";\n  const questions = Array.isArray(group.questions) ? group.questions : [];\n\n  if (questions.length === 0) continue;\n\n  tex += `\\\\section*{${escWithSmartQuotes(sectionTitle)}}\\n`;\n\n  if (SHOW_GROUP_PURPOSE && group.group_purpose) {\n    tex += `${escWithSmartQuotes(group.group_purpose)}\\n\\n`;\n  }\n\n  tex += `\\\\begin{enumerate}\\n`;\n  for (const q of questions) {\n    tex += `\\\\item ${escWithSmartQuotes(q.question_text)}\\n`;\n  }\n  tex += `\\\\end{enumerate}\\n\\n`;\n}\n\nif (ambiguityFlags.length > 0) {\n  tex += `\\\\section*{Identified Ambiguities}\\n`;\n  tex += `\\\\begin{itemize}\\n`;\n  for (const flag of ambiguityFlags) {\n    tex += `\\\\item ${escWithSmartQuotes(flag)}\\n`;\n  }\n  tex += `\\\\end{itemize}\\n\\n`;\n}\n\nif (completenessNotes.length > 0) {\n  tex += `\\\\section*{Completeness Notes}\\n`;\n  tex += `\\\\begin{itemize}\\n`;\n  for (const note of completenessNotes) {\n    tex += `\\\\item ${escWithSmartQuotes(note)}\\n`;\n  }\n  tex += `\\\\end{itemize}\\n\\n`;\n}\n\ntex += `\\\\end{document}\\n`;\n\nreturn [\n  {\n    json: {\n      filename: `${sourceInputId || \"SDE\"}_customer_discovery_review.tex`,\n      latex_content: tex\n    }\n  }\n];\n\n// Helpers\nfunction toReviewStatusLabel(status) {\n  const normalized = String(status || \"\").toLowerCase();\n  if (normalized === \"ready_for_review\") return \"Ready for stakeholder review\";\n  return status || \"Ready for review\";\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1984,
+        -7552
+      ],
+      "id": "c2daecd0-f307-424c-b4d6-fea100658329",
+      "name": "Render Customer SDE Output (LaTeX)"
+    },
+    {
+      "parameters": {
+        "operation": "toText",
+        "sourceProperty": "latex_content",
+        "options": {
+          "fileName": "={{$json.filename}}"
+        }
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        2208,
+        -7552
+      ],
+      "id": "be1f4d2f-162c-4c65-acd4-d61ac9c57764",
+      "name": "Convert to LaTeX"
+    },
+    {
+      "parameters": {
+        "content": "###  INTERNAL DIAGNOSTICS",
+        "height": 80,
+        "width": 150,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1728,
+        -8032
+      ],
+      "typeVersion": 1,
+      "id": "65348d7c-239b-4719-87e2-67716b7795ce",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "### CUSTOMER-FACING DOCUMENTS",
+        "height": 80,
+        "width": 150,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1744,
+        -7744
+      ],
+      "typeVersion": 1,
+      "id": "1226c5e2-2ac2-4549-8d32-e900480e0691",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const artifact = $(\"Prepare Output Artifact\").first().json;\n\nconst validatedOutput = artifact.validated_output || null;\nconst responseEnvelope = artifact.response_envelope || {};\nconst responseOutput = responseEnvelope.output || null;\nconst outputValidation = artifact.output_validation || {};\nconst artifactMetadata = artifact.artifact_metadata || {};\n\nif (outputValidation.validation_status !== \"PASS\") {\n  throw new Error(\"Prepare Technical SDE Output received output that did not pass output validation.\");\n}\n\nconst sdeOutput = validatedOutput || responseOutput;\n\nif (!sdeOutput) {\n  throw new Error(\"Prepare Technical SDE Output could not locate a valid SDE output payload.\");\n}\n\nreturn [\n  {\n    json: {\n      artifact_type: \"SDE_TECHNICAL_OUTPUT\",\n      artifact_version: \"v0_1\",\n      delivery_format: \"json\",\n      source_input_id:\n        artifactMetadata.source_input_id ??\n        sdeOutput.source_input_id ??\n        null,\n      output_id:\n        artifactMetadata.output_id ??\n        sdeOutput.output_id ??\n        null,\n      generated_at_utc:\n        artifactMetadata.generated_at_utc ??\n        new Date().toISOString(),\n      sde_output: sdeOutput\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        -7360
+      ],
+      "id": "8445371f-af62-4ade-afec-0d136e12720d",
+      "name": "Prepare Technical SDE Output"
+    },
+    {
+      "parameters": {
+        "content": "### TECHNICAL/DEVELOPER DOCUMENTS",
+        "height": 80,
+        "width": 230,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1472,
+        -7248
+      ],
+      "typeVersion": 1,
+      "id": "7a119bd7-581c-4aa3-96b3-bed0f29ba0bb",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "operation": "toJson",
+        "options": {
+          "format": true,
+          "fileName": "={{$json.output_id}}.json"
+        }
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        1984,
+        -7360
+      ],
+      "id": "2172f11b-11f5-4c02-b669-710b0def7020",
+      "name": "Convert to JSON"
+    },
+    {
+      "parameters": {
+        "formTitle": "SDE Discovery Intake",
+        "formDescription": "Provide a brief description of your idea or problem. This will be transformed into a structured discovery question set.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Describe your problem, idea, or process you want to explore",
+              "fieldType": "textarea",
+              "fieldName": "problem_description"
+            },
+            {
+              "fieldLabel": "Additional context (company, team, tools, or situation)",
+              "fieldType": "textarea",
+              "fieldName": "business_context"
+            },
+            {
+              "fieldLabel": "Business domain (e.g., support, HR, IT, operations)",
+              "fieldName": "domain"
+            },
+            {
+              "fieldLabel": "What outcome are you hoping for?",
+              "fieldType": "textarea",
+              "fieldName": "desired_outcome"
+            },
+            {
+              "fieldLabel": "Any constraints or limitations?",
+              "fieldType": "textarea",
+              "fieldName": "constraints_or_limitations"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.5,
+      "position": [
+        -1280,
+        -7552
+      ],
+      "id": "d9e58665-2472-4b08-87c2-a08ff93d3228",
+      "name": "On form submission",
+      "webhookId": "2a6c691c-6403-44be-b723-b675ba25b5c0"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare Intake Payload\n// Purpose:\n// Wrap the form-emitted source fields into the shared intake payload contract\n// used by the shared \"Map Input to SDE Input Object\" node.\n//\n// Expected incoming form shape:\n// {\n//   problem_description: \"...\",\n//   business_context: \"...\",\n//   domain: \"...\",\n//   desired_outcome: \"...\",\n//   constraints_or_limitations: \"...\",\n//   submittedAt: \"...\",\n//   formMode: \"test\" | ...\n// }\n\nfunction nonEmpty(value) {\n  return value !== undefined && value !== null && String(value).trim() !== \"\";\n}\n\nfunction asTrimmedString(value) {\n  if (!nonEmpty(value)) return \"\";\n  return String(value).trim();\n}\n\nconst src = $json ?? {};\n\nconst problemDescription = asTrimmedString(src.problem_description);\nconst businessContext = asTrimmedString(src.business_context);\nconst domain = asTrimmedString(src.domain);\nconst desiredOutcome = asTrimmedString(src.desired_outcome);\nconst constraintsOrLimitations = asTrimmedString(src.constraints_or_limitations);\n\nconst submittedAt =\n  asTrimmedString(src.submittedAt) ||\n  asTrimmedString(src.submitted_at) ||\n  new Date().toISOString();\n\nconst formMode = asTrimmedString(src.formMode) || \"form_submission\";\n\nreturn [\n  {\n    json: {\n      intake_source: \"FORM\",\n      submitted_at: submittedAt,\n      raw_fields: {\n        problem_description: problemDescription,\n        business_context: businessContext,\n        domain: domain,\n        desired_outcome: desiredOutcome,\n        constraints_or_limitations: constraintsOrLimitations,\n      },\n      source_metadata: {\n        source_type: \"FORM\",\n        source_ref: formMode,\n        submitted_by: \"form_user\"\n      }\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1056,
+        -7552
+      ],
+      "id": "890dfa93-86ac-4b49-8dcf-687fd4f9df2e",
+      "name": "Prepare Intake Payload"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "dc2cba83-7845-41ed-9f53-6913368bd7ae",
+              "leftValue": "={{$json.input_validation.validation_status}}",
+              "rightValue": "PASS",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        64,
+        -7456
+      ],
+      "id": "ed4483dc-9fa9-4892-8f5b-52921d79fd6e",
+      "name": "Input Admissibility Gate"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst data = item.json;\n\nconst outputValidation = data.output_validation || {};\nconst validationStatus = outputValidation.validation_status || \"UNKNOWN\";\n\nif (validationStatus !== \"PASS\") {\n  throw new Error(\"Prepare Output Artifact received output that did not pass output validation.\");\n}\n\n// Current shape from Validate Output Structure:\n// {\n//   status,\n//   output,\n//   errors,\n//   audit,\n//   output_validation\n// }\n\nconst {\n  output_validation,\n  ...responseEnvelope\n} = data;\n\nconst validatedOutput = responseEnvelope.output || {};\n\nreturn [\n  {\n    json: {\n      artifact_type: \"SDE_OUTPUT_ARTIFACT\",\n      artifact_version: \"v0_1\",\n      artifact_status: \"ready_for_comparison\",\n\n      // Full model response envelope, minus validation metadata\n      response_envelope: responseEnvelope,\n\n      // Inner schema-validated SDE output object\n      validated_output: validatedOutput,\n\n      // Deterministic validator result\n      output_validation,\n\n      artifact_metadata: {\n        source_input_id: validatedOutput.source_input_id ?? null,\n        output_id: validatedOutput.output_id ?? null,\n        generated_at_utc: new Date().toISOString()\n      }\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1536,
+        -7552
+      ],
+      "id": "7bf97a3b-78aa-4e05-aef9-44b356198747",
+      "name": "Prepare Output Artifact"
+    },
+    {
+      "parameters": {
+        "jsCode": "const comparisonContext = $(\"Load Expected Output Fixture\").first().json;\n\nconst comparisonSubject = comparisonContext.comparison_subject || {};\nconst expectedFixture = comparisonContext.expected_fixture || {};\n\nconst actual = comparisonSubject.validated_output || {};\nconst expected = expectedFixture || {};\n\nconst comparison_errors = [];\nconst comparison_notes = [];\nconst comparison_checks = [];\n\n// --- Helpers ---\nfunction addCheck(name, passed, detail) {\n  comparison_checks.push({\n    check_name: name,\n    severity: \"HARD\",\n    passed,\n    detail\n  });\n\n  if (!passed) {\n    comparison_errors.push({\n      check_name: name,\n      detail\n    });\n  }\n}\n\nfunction addSoftCheck(name, passed, detail) {\n  comparison_checks.push({\n    check_name: name,\n    severity: \"SOFT\",\n    passed,\n    detail\n  });\n\n  if (!passed) {\n    comparison_notes.push(`[SOFT] ${name}: ${detail}`);\n  }\n}\n\nfunction asArray(value) {\n  return Array.isArray(value) ? value : [];\n}\n\nfunction unique(arr) {\n  return [...new Set(arr)];\n}\n\nfunction extractGroupNames(output) {\n  return asArray(output.question_groups)\n    .map(group => group.group_name)\n    .filter(Boolean);\n}\n\n// --- Extract values ---\nconst actualGroups = asArray(actual.question_groups);\nconst expectedGroups = asArray(expected.question_groups);\n\nconst actualGroupNames = unique(extractGroupNames(actual));\nconst expectedGroupNames = unique(extractGroupNames(expected));\n\nconst actualAmbiguityFlags = asArray(actual.ambiguity_flags);\nconst expectedAmbiguityFlags = asArray(expected.ambiguity_flags);\n\nconst actualCompletenessNotes = asArray(actual.completeness_notes);\nconst expectedCompletenessNotes = asArray(expected.completeness_notes);\n\n// --- 1. sde_version alignment ---\naddCheck(\n  \"sde_version_match\",\n  actual.sde_version === expected.sde_version,\n  actual.sde_version === expected.sde_version\n    ? `sde_version matched: ${actual.sde_version}`\n    : `Mismatch: actual=${actual.sde_version ?? null}, expected=${expected.sde_version ?? null}`\n);\n\n// --- 2. Question group count sanity ---\naddCheck(\n  \"question_group_count_nonzero\",\n  actualGroups.length > 0,\n  actualGroups.length > 0\n    ? `Actual output has ${actualGroups.length} question groups`\n    : \"Actual output has no question groups\"\n);\n\n// --- 3. Required expected group-name coverage ---\nconst missingExpectedGroups = expectedGroupNames.filter(\n  name => !actualGroupNames.includes(name)\n);\naddCheck(\n  \"expected_group_names_covered\",\n  missingExpectedGroups.length === 0,\n  missingExpectedGroups.length === 0\n    ? `All expected group names were present: ${expectedGroupNames.join(\", \")}`\n    : `Missing expected group names: ${missingExpectedGroups.join(\", \")}`\n);\n\n// --- 4. Generated group-name set sanity ---\naddCheck(\n  \"actual_group_name_count_reasonable\",\n  actualGroupNames.length >= Math.max(1, expectedGroupNames.length - 1),\n  `Actual group names: ${actualGroupNames.join(\", \")}`\n);\n\n// --- 5. Every actual group has at least one question ---\nconst emptyGroups = actualGroups\n  .filter(group => !Array.isArray(group.questions) || group.questions.length === 0)\n  .map(group => group.group_name || group.group_id || \"(unknown)\");\n\naddCheck(\n  \"no_empty_actual_question_groups\",\n  emptyGroups.length === 0,\n  emptyGroups.length === 0\n    ? \"All actual groups contain at least one question\"\n    : `Empty actual groups: ${emptyGroups.join(\", \")}`\n);\n\n// --- 6. source_input_id alignment (SOFT only) ---\naddSoftCheck(\n  \"source_input_id_alignment\",\n  actual.source_input_id === expected.source_input_id,\n  actual.source_input_id === expected.source_input_id\n    ? `source_input_id matched: ${actual.source_input_id}`\n    : `Difference is acceptable for live-vs-fixture comparison: actual=${actual.source_input_id ?? null}, expected=${expected.source_input_id ?? null}`\n);\n\n// --- 7. output_id alignment (SOFT only) ---\naddSoftCheck(\n  \"output_id_alignment\",\n  actual.output_id === expected.output_id,\n  actual.output_id === expected.output_id\n    ? `output_id matched: ${actual.output_id}`\n    : `Difference is acceptable for live-vs-fixture comparison: actual=${actual.output_id ?? null}, expected=${expected.output_id ?? null}`\n);\n\n// --- 8. Ambiguity flag presence alignment (SOFT) ---\naddSoftCheck(\n  \"ambiguity_flag_presence_alignment\",\n  (expectedAmbiguityFlags.length === 0 && actualAmbiguityFlags.length === 0) ||\n  (expectedAmbiguityFlags.length > 0 && actualAmbiguityFlags.length > 0),\n  `expected ambiguity_flags count=${expectedAmbiguityFlags.length}, actual count=${actualAmbiguityFlags.length}`\n);\n\n// --- 9. Completeness notes presence alignment (SOFT) ---\naddSoftCheck(\n  \"completeness_notes_presence_alignment\",\n  (expectedCompletenessNotes.length === 0 && actualCompletenessNotes.length === 0) ||\n  (expectedCompletenessNotes.length > 0 && actualCompletenessNotes.length > 0),\n  `expected completeness_notes count=${expectedCompletenessNotes.length}, actual count=${actualCompletenessNotes.length}`\n);\n\n// --- Optional general notes ---\nif (actualGroups.length !== expectedGroups.length) {\n  comparison_notes.push(\n    `Actual question group count (${actualGroups.length}) differs from expected fixture (${expectedGroups.length}). This may still be acceptable if coverage is strong.`\n  );\n}\n\nif (actualAmbiguityFlags.length !== expectedAmbiguityFlags.length) {\n  comparison_notes.push(\n    `Actual ambiguity_flags count (${actualAmbiguityFlags.length}) differs from expected fixture (${expectedAmbiguityFlags.length}).`\n  );\n}\n\nif (actualCompletenessNotes.length !== expectedCompletenessNotes.length) {\n  comparison_notes.push(\n    `Actual completeness_notes count (${actualCompletenessNotes.length}) differs from expected fixture (${expectedCompletenessNotes.length}).`\n  );\n}\n\n// --- Overall comparison status (HARD checks only) ---\nconst comparison_status = comparison_errors.length === 0 ? \"PASS\" : \"FAIL\";\n\nreturn [\n  {\n    json: {\n      comparison_status,\n      comparison_error_count: comparison_errors.length,\n      comparison_checks,\n      comparison_errors,\n      comparison_notes,\n      comparison_summary:\n        comparison_status === \"PASS\"\n          ? \"Actual output is structurally aligned with the expected fixture.\"\n          : `Actual output failed ${comparison_errors.length} hard comparison checks.`,\n      actual_output_id: actual.output_id ?? null,\n      expected_output_id: expected.output_id ?? null,\n      actual_source_input_id: actual.source_input_id ?? null,\n      expected_source_input_id: expected.source_input_id ?? null,\n      fixture_id: comparisonContext.fixture_metadata?.fixture_id ?? null\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1984,
+        -7936
+      ],
+      "id": "21e72b63-b610-461d-b894-fdc337fad45b",
+      "name": "Compare to Expected Output"
+    },
+    {
+      "parameters": {
+        "jsCode": "function getFirstAvailableJson(nodeNames) {\n  for (const nodeName of nodeNames) {\n    try {\n      const item = $(nodeName).first();\n      if (item && item.json) {\n        return { nodeName, json: item.json };\n      }\n    } catch (err) {\n      // Ignore nodes that were not executed\n    }\n  }\n  throw new Error(`No executed node found from candidates: ${nodeNames.join(\", \")}`);\n}\n\nconst inputSource = getFirstAvailableJson([\n  \"Map Input to SDE Input Object\",\n  \"Load Fixture SDE Input Object\"\n]);\n\nconst schemaSource = getFirstAvailableJson([\n  \"Load Input Schema\",\n  \"Load Input Schema1\"\n]);\n\nconst inputData = inputSource.json;\nconst schema = schemaSource.json;\n\nif (!inputData || typeof inputData !== \"object\" || Array.isArray(inputData)) {\n  throw new Error(\"Prepare Validation Context: inputData must be a top-level object.\");\n}\n\nif (!schema || typeof schema !== \"object\" || Array.isArray(schema)) {\n  throw new Error(\"Prepare Validation Context: schema must be a top-level object.\");\n}\n\nreturn [\n  {\n    json: {\n      input_data: inputData,\n      schema: schema,\n      validation_context_metadata: {\n        input_source_node: inputSource.nodeName,\n        schema_source_node: schemaSource.nodeName\n      }\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -384,
+        -7456
+      ],
+      "id": "a6263dab-9217-4606-8178-ef5a08f586a1",
+      "name": "Prepare Validation Context"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Map Input to SDE Input Object\n// Purpose:\n// Deterministically map a common intake payload contract into the SDE input schema shape.\n// This node is shared by both form and fixture branches.\n//\n// Expected incoming payload shape:\n// {\n//   intake_source: \"FORM\" | \"FIXTURE\",\n//   submitted_at: \"ISO-8601 timestamp\",\n//   raw_fields: {\n//     problem_description: \"...\",\n//     business_context: \"...\",\n//     domain: \"...\",\n//     desired_outcome: \"...\",\n//     constraints_or_limitations: \"...\",\n//     stakeholders: [],                 // optional\n//     desired_output_type: \"...\"        // optional\n//   },\n//   source_metadata: {\n//     source_type: \"...\",\n//     source_ref: \"...\",\n//     submitted_by: \"...\"\n//   }\n// }\n\nfunction nonEmpty(value) {\n  return value !== undefined && value !== null && String(value).trim() !== \"\";\n}\n\nfunction asTrimmedString(value) {\n  if (!nonEmpty(value)) return \"\";\n  return String(value).trim();\n}\n\nfunction buildInputId(ts, intakeSource = \"INPUT\") {\n  const d = ts ? new Date(ts) : new Date();\n  const iso = isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();\n  const compact = iso.replace(/[-:TZ.]/g, \"\").slice(0, 14);\n  const prefix = String(intakeSource || \"INPUT\").toLowerCase();\n  return `${prefix}_${compact}`;\n}\n\nfunction normalizeStringArray(value) {\n  if (Array.isArray(value)) {\n    return value\n      .map((v) => String(v).trim())\n      .filter((v) => v.length > 0);\n  }\n\n  if (nonEmpty(value)) {\n    // Preserve a single raw text value as one array item rather than inventing a split.\n    return [String(value).trim()];\n  }\n\n  return [];\n}\n\nconst src = $json ?? {};\nconst raw = src.raw_fields ?? {};\nconst sourceMetadata = src.source_metadata ?? {};\n\nconst problemDescription = asTrimmedString(raw.problem_description);\nconst businessContext = asTrimmedString(raw.business_context);\nconst domain = asTrimmedString(raw.domain);\nconst desiredOutcome = asTrimmedString(raw.desired_outcome);\nconst constraintsOrLimitations = raw.constraints_or_limitations;\nconst stakeholders = raw.stakeholders;\nconst desiredOutputType = asTrimmedString(raw.desired_output_type);\n\nconst output = {\n  sde_version: \"v0_1\",\n  input_id: buildInputId(src.submitted_at, src.intake_source),\n  problem_description: problemDescription,\n};\n\n// Optional fields: preserve verbatim only if explicitly present\nif (nonEmpty(businessContext)) {\n  output.business_context = businessContext;\n}\n\nif (nonEmpty(domain)) {\n  output.domain = domain;\n}\n\n// Preserve explicitly provided stakeholder list only.\n// Do not infer stakeholders from prose.\nconst normalizedStakeholders = normalizeStringArray(stakeholders);\nif (normalizedStakeholders.length > 0) {\n  output.stakeholders = normalizedStakeholders;\n}\n\n// Preserve constraints verbatim.\n// If provided as a single textarea string, keep as one array item.\n// If already provided as an array, preserve cleaned array items.\nconst normalizedConstraints = normalizeStringArray(constraintsOrLimitations);\nif (normalizedConstraints.length > 0) {\n  output.known_constraints = normalizedConstraints;\n}\n\n// Pass through desired_output_type only if explicitly present.\n// Do not infer it.\nif (nonEmpty(desiredOutputType)) {\n  output.desired_output_type = desiredOutputType;\n}\n\n// Your current SDE input schema does not have a dedicated desired_outcome field,\n// so preserve desired outcome in notes rather than inventing a new schema field.\nif (nonEmpty(desiredOutcome)) {\n  output.desired_outcome = desiredOutcome;\n}\n\n// Preserve source metadata only if present\nif (\n  sourceMetadata &&\n  typeof sourceMetadata === \"object\" &&\n  Object.values(sourceMetadata).some((v) => nonEmpty(v))\n) {\n  output.source_metadata = {};\n\n  if (nonEmpty(sourceMetadata.source_type)) {\n    output.source_metadata.source_type = asTrimmedString(sourceMetadata.source_type);\n  }\n\n  if (nonEmpty(sourceMetadata.source_ref)) {\n    output.source_metadata.source_ref = asTrimmedString(sourceMetadata.source_ref);\n  }\n\n  if (nonEmpty(sourceMetadata.submitted_by)) {\n    output.source_metadata.submitted_by = asTrimmedString(sourceMetadata.submitted_by);\n  }\n\n  if (Object.keys(output.source_metadata).length === 0) {\n    delete output.source_metadata;\n  }\n}\n\nreturn [\n  {\n    json: output,\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -832,
+        -7552
+      ],
+      "id": "a226a1c1-1566-4d4c-bbb8-f5cf325b5205",
+      "name": "Map Input to SDE Input Object"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [\n  {\n    json: {\n      \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n      \"$id\": \"sde.input.schema.v0_1.json\",\n      \"title\": \"Structured Discovery Engine Input Schema\",\n      \"description\": \"Input contract for Structured Discovery Engine (SDE) v0.1. Defines the minimum and optional fields accepted before discovery question generation begins.\",\n      \"type\": \"object\",\n      \"additionalProperties\": false,\n      \"required\": [\n        \"sde_version\",\n        \"input_id\",\n        \"problem_description\"\n      ],\n      \"properties\": {\n        \"sde_version\": {\n          \"type\": \"string\",\n          \"const\": \"v0_1\",\n          \"description\": \"Schema version for the Structured Discovery Engine input contract.\"\n        },\n        \"input_id\": {\n          \"type\": \"string\",\n          \"minLength\": 1,\n          \"description\": \"Unique identifier for the intake object being processed by SDE.\"\n        },\n        \"problem_description\": {\n          \"type\": \"string\",\n          \"minLength\": 20,\n          \"description\": \"Raw human-provided description of the situation, project, workflow idea, need, or problem to be clarified.\"\n        },\n        \"business_context\": {\n          \"type\": \"string\",\n          \"minLength\": 1,\n          \"description\": \"Optional business or organizational context that helps frame the discovery questions.\"\n        },\n        \"domain\": {\n          \"type\": \"string\",\n          \"minLength\": 1,\n          \"description\": \"Optional domain hint such as operations, legal, sales, HR, compliance, product, or finance.\"\n        },\n        \"stakeholders\": {\n          \"type\": \"array\",\n          \"description\": \"Optional list of known stakeholders, user groups, or decision-makers relevant to the problem.\",\n          \"items\": {\n            \"type\": \"string\",\n            \"minLength\": 1\n          },\n          \"uniqueItems\": true\n        },\n        \"known_constraints\": {\n          \"type\": \"array\",\n          \"description\": \"Optional list of known limits, restrictions, policies, budgets, timelines, tooling, or environmental constraints.\",\n          \"items\": {\n            \"type\": \"string\",\n            \"minLength\": 1\n          },\n          \"uniqueItems\": true\n        },\n        \"desired_output_type\": {\n          \"type\": \"string\",\n          \"enum\": [\n            \"DISCOVERY_QUESTIONS\",\n            \"INTAKE_OUTLINE\",\n            \"SCOPING_QUESTIONS\",\n            \"RISK_DISCOVERY\",\n            \"GENERAL_CLARIFICATION\"\n          ],\n          \"description\": \"Optional hint about the intended discovery output posture.\"\n        },\n        \"desired_outcome\": {\n          \"type\": \"string\",\n          \"minLength\": 1,\n          \"description\": \"Optional statement of the outcome the requester hopes to achieve.\"\n        },\n        \"notes\": {\n          \"type\": \"string\",\n          \"minLength\": 1,\n          \"description\": \"Optional freeform notes, context, or operator comments.\"\n        },\n        \"source_metadata\": {\n          \"type\": \"object\",\n          \"description\": \"Optional metadata about where the intake came from.\",\n          \"additionalProperties\": false,\n          \"properties\": {\n            \"source_type\": {\n              \"type\": \"string\",\n              \"enum\": [\n                \"CHAT\",\n                \"FORM\",\n                \"EMAIL\",\n                \"DOCUMENT\",\n                \"API\",\n                \"MANUAL_ENTRY\",\n                \"OTHER\"\n              ],\n              \"description\": \"Origin type of the intake object.\"\n            },\n            \"source_ref\": {\n              \"type\": \"string\",\n              \"minLength\": 1,\n              \"description\": \"Optional source reference such as message id, document id, or ticket id.\"\n            },\n            \"submitted_by\": {\n              \"type\": \"string\",\n              \"minLength\": 1,\n              \"description\": \"Optional submitter or operator identifier.\"\n            }\n          }\n        }\n      }\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -608,
+        -7552
+      ],
+      "id": "4baa7920-1689-4f82-bcc4-c7e4267954f3",
+      "name": "Load Input Schema"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Load Fixture SDE Input Object\n// Purpose:\n// Emit a ready-made SDE input object for fast workflow testing,\n// aligned to the current form-collected fields plus required SDE wrapper fields.\n\nreturn [\n  {\n    json: {\n      sde_version: \"v0_1\",\n      input_id: \"fixture_20260329_000000\",\n      problem_description:\n        \"We want an internal AI assistant that can answer SOP questions for our operations team and maybe later create maintenance tickets automatically, but we are not sure what systems it should connect to or how much approval should be required.\",\n      business_context:\n        \"The company wants to explore using AI to reduce repetitive operational support work and improve response speed for internal process questions.\",\n      domain: \"operations\",\n      known_constraints: [\n        \"The first version should likely be internal only. The team is not yet sure which systems the assistant should access. Any future ticket automation may require approvals. The company wants to reduce risk while exploring AI.\"\n      ],\n      desired_outcome:\n        \"Reduce repetitive operational support work and improve response speed for internal process questions.\",\n      source_metadata: {\n        source_type: \"MANUAL_ENTRY\",\n        source_ref: \"F01_valid_input\",\n        submitted_by: \"operator\"\n      }\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -832,
+        -7360
+      ],
+      "id": "de17eb6d-5ba1-415d-bd49-77e5c0cdf1a0",
+      "name": "Load Fixture SDE Input Object"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [\n  {\n    json: {\n      \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n      \"$id\": \"sde.input.schema.v0_1.json\",\n      \"title\": \"Structured Discovery Engine Input Schema\",\n      \"description\": \"Input contract for Structured Discovery Engine (SDE) v0.1. Defines the minimum and optional fields accepted before discovery question generation begins.\",\n      \"type\": \"object\",\n      \"additionalProperties\": false,\n      \"required\": [\n        \"sde_version\",\n        \"input_id\",\n        \"problem_description\"\n      ],\n      \"properties\": {\n        \"sde_version\": {\n          \"type\": \"string\",\n          \"const\": \"v0_1\",\n          \"description\": \"Schema version for the Structured Discovery Engine input contract.\"\n        },\n        \"input_id\": {\n          \"type\": \"string\",\n          \"minLength\": 1,\n          \"description\": \"Unique identifier for the intake object being processed by SDE.\"\n        },\n        \"problem_description\": {\n          \"type\": \"string\",\n          \"minLength\": 20,\n          \"description\": \"Raw human-provided description of the situation, project, workflow idea, need, or problem to be clarified.\"\n        },\n        \"business_context\": {\n          \"type\": \"string\",\n          \"minLength\": 1,\n          \"description\": \"Optional business or organizational context that helps frame the discovery questions.\"\n        },\n        \"domain\": {\n          \"type\": \"string\",\n          \"minLength\": 1,\n          \"description\": \"Optional domain hint such as operations, legal, sales, HR, compliance, product, or finance.\"\n        },\n        \"stakeholders\": {\n          \"type\": \"array\",\n          \"description\": \"Optional list of known stakeholders, user groups, or decision-makers relevant to the problem.\",\n          \"items\": {\n            \"type\": \"string\",\n            \"minLength\": 1\n          },\n          \"uniqueItems\": true\n        },\n        \"known_constraints\": {\n          \"type\": \"array\",\n          \"description\": \"Optional list of known limits, restrictions, policies, budgets, timelines, tooling, or environmental constraints.\",\n          \"items\": {\n            \"type\": \"string\",\n            \"minLength\": 1\n          },\n          \"uniqueItems\": true\n        },\n        \"desired_output_type\": {\n          \"type\": \"string\",\n          \"enum\": [\n            \"DISCOVERY_QUESTIONS\",\n            \"INTAKE_OUTLINE\",\n            \"SCOPING_QUESTIONS\",\n            \"RISK_DISCOVERY\",\n            \"GENERAL_CLARIFICATION\"\n          ],\n          \"description\": \"Optional hint about the intended discovery output posture.\"\n        },\n        \"desired_outcome\": {\n          \"type\": \"string\",\n          \"minLength\": 1,\n          \"description\": \"Optional statement of the outcome the requester hopes to achieve.\"\n        },\n        \"notes\": {\n          \"type\": \"string\",\n          \"minLength\": 1,\n          \"description\": \"Optional freeform notes, context, or operator comments.\"\n        },\n        \"source_metadata\": {\n          \"type\": \"object\",\n          \"description\": \"Optional metadata about where the intake came from.\",\n          \"additionalProperties\": false,\n          \"properties\": {\n            \"source_type\": {\n              \"type\": \"string\",\n              \"enum\": [\n                \"CHAT\",\n                \"FORM\",\n                \"EMAIL\",\n                \"DOCUMENT\",\n                \"API\",\n                \"MANUAL_ENTRY\",\n                \"OTHER\"\n              ],\n              \"description\": \"Origin type of the intake object.\"\n            },\n            \"source_ref\": {\n              \"type\": \"string\",\n              \"minLength\": 1,\n              \"description\": \"Optional source reference such as message id, document id, or ticket id.\"\n            },\n            \"submitted_by\": {\n              \"type\": \"string\",\n              \"minLength\": 1,\n              \"description\": \"Optional submitter or operator identifier.\"\n            }\n          }\n        }\n      }\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -608,
+        -7360
+      ],
+      "id": "f97fb51e-47d1-4918-95a8-af4f4715ca8f",
+      "name": "Load Input Schema1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "f8744f57-39e9-4df3-8334-01d3255356f7",
+              "leftValue": "={{$json.run_status}}",
+              "rightValue": "FAIL",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2432,
+        -7936
+      ],
+      "id": "f9aafbef-7cfa-4c1e-a5b3-5f2c8714ab51",
+      "name": "Internal Diagnostics Failure Gate"
+    },
+    {
+      "parameters": {
+        "jsCode": "const resolution = $(\"Resolve Run Status\").first().json;\n\nconst runStatus = resolution.run_status ?? \"UNKNOWN\";\nconst runSummary = resolution.run_summary ?? \"No run summary provided.\";\nconst sourceInputId = resolution.source_input_id ?? \"UNKNOWN\";\nconst outputId = resolution.output_id ?? \"UNKNOWN\";\nconst fixtureId = resolution.fixture_id ?? \"UNKNOWN\";\n\nconst resolutionDetail = resolution.resolution_detail ?? {};\nconst outputValidation = resolution.output_validation ?? {};\nconst comparisonResult = resolution.comparison_result ?? {};\n\nconst comparisonErrors = Array.isArray(comparisonResult.comparison_errors)\n  ? comparisonResult.comparison_errors\n  : [];\n\nconst comparisonNotes = Array.isArray(comparisonResult.comparison_notes)\n  ? comparisonResult.comparison_notes\n  : [];\n\nconst comparisonChecks = Array.isArray(comparisonResult.comparison_checks)\n  ? comparisonResult.comparison_checks\n  : [];\n\nconst failedHardChecks = comparisonChecks.filter(\n  check => check?.severity === \"HARD\" && check?.passed === false\n);\n\nconst emittedAtUtc = new Date().toISOString();\n\nconst subject = `[SDE Internal Diagnostics Failure] ${outputId}`;\n\nconst lines = [];\n\n// Primary failure signal\nlines.push(\"PRIMARY FAILURE SIGNAL:\");\n\nif (failedHardChecks.length > 0) {\n  for (const check of failedHardChecks) {\n    lines.push(`- ${check.check_name}: ${check.detail ?? \"No detail provided\"}`);\n  }\n} else {\n  lines.push(\"- None\");\n}\n\nlines.push(\"\");\nlines.push(\"SDE internal diagnostics reported a FAIL status.\");\nlines.push(\"\");\nlines.push(`Run Status: ${runStatus}`);\nlines.push(`Run Summary: ${runSummary}`);\nlines.push(`Source Input ID: ${sourceInputId}`);\nlines.push(`Output ID: ${outputId}`);\nlines.push(`Fixture ID: ${fixtureId}`);\nlines.push(`Emitted At UTC: ${emittedAtUtc}`);\nlines.push(\"\");\nlines.push(\"Resolution Detail:\");\nlines.push(`- Output Validation Status: ${resolutionDetail.output_validation_status ?? \"UNKNOWN\"}`);\nlines.push(`- Comparison Status: ${resolutionDetail.comparison_status ?? \"UNKNOWN\"}`);\nlines.push(`- Comparison Note Count: ${resolutionDetail.comparison_note_count ?? 0}`);\nlines.push(`- Comparison Error Count: ${resolutionDetail.comparison_error_count ?? 0}`);\nlines.push(\"\");\nlines.push(\"Output Validation Errors:\");\n\nif (Array.isArray(outputValidation.errors) && outputValidation.errors.length > 0) {\n  for (const err of outputValidation.errors) {\n    lines.push(\n      `- ${err.code ?? \"UNKNOWN_CODE\"} | field=${err.field ?? \"UNKNOWN_FIELD\"} | ${err.message ?? \"No message\"}`\n    );\n  }\n} else {\n  lines.push(\"- None\");\n}\n\nlines.push(\"\");\nlines.push(\"Failed Hard Comparison Checks:\");\n\nif (failedHardChecks.length > 0) {\n  for (const check of failedHardChecks) {\n    lines.push(`- ${check.check_name}: ${check.detail ?? \"No detail provided\"}`);\n  }\n} else {\n  lines.push(\"- None\");\n}\n\nlines.push(\"\");\nlines.push(\"Comparison Errors:\");\n\nif (comparisonErrors.length > 0) {\n  for (const err of comparisonErrors) {\n    lines.push(`- ${err.check_name ?? \"UNKNOWN_CHECK\"}: ${err.detail ?? \"No detail provided\"}`);\n  }\n} else {\n  lines.push(\"- None\");\n}\n\nlines.push(\"\");\nlines.push(\"Comparison Notes:\");\n\nif (comparisonNotes.length > 0) {\n  for (const note of comparisonNotes) {\n    lines.push(`- ${note}`);\n  }\n} else {\n  lines.push(\"- None\");\n}\n\nconst body = lines.join(\"\\n\");\n\nreturn [\n  {\n    json: {\n      notification_type: \"SDE_RUN_FAILURE_REPORT\",\n      notification_version: \"v0_1\",\n      run_status: runStatus,\n      subject,\n      body,\n      metadata: {\n        source_input_id: sourceInputId,\n        output_id: outputId,\n        fixture_id: fixtureId,\n        emitted_at_utc: emittedAtUtc\n      },\n      resolution_detail: resolutionDetail,\n      output_validation: outputValidation,\n      comparison_result: comparisonResult\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2656,
+        -8032
+      ],
+      "id": "aea21945-91d9-45be-9d0e-576b4050dd21",
+      "name": "Prepare Failure Email Payload"
+    },
+    {
+      "parameters": {
+        "sendTo": "robert.h.designlogic@gmail.com",
+        "subject": "={{$json.subject}}",
+        "emailType": "text",
+        "message": "={{$json.body}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        2880,
+        -8032
+      ],
+      "id": "ca81891c-6a80-442b-b154-6d02e304dc7b",
+      "name": "Send a message",
+      "webhookId": "ee21797f-1b5a-48b0-9d35-0b384546ebc8",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "RjLNrFqsbt9JnBbU",
+          "name": "Gmail OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\n\nif (!input.response_envelope || typeof input.response_envelope !== \"object\") {\n  throw new Error(\"SDE Handoff Preparation: missing response_envelope object.\");\n}\n\nif (!input.response_envelope.output || typeof input.response_envelope.output !== \"object\") {\n  throw new Error(\"SDE Handoff Preparation: missing response_envelope.output object.\");\n}\n\nif (!input.artifact_metadata || typeof input.artifact_metadata !== \"object\") {\n  throw new Error(\"SDE Handoff Preparation: missing artifact_metadata object.\");\n}\n\nconst sourceInputId = input.artifact_metadata.source_input_id;\nconst outputId = input.artifact_metadata.output_id;\nconst generatedAtUtc = input.artifact_metadata.generated_at_utc;\n\nif (!sourceInputId || !outputId || !generatedAtUtc) {\n  throw new Error(\"SDE Handoff Preparation: artifact_metadata is missing required identity fields.\");\n}\n\nreturn [\n  {\n    json: {\n      artifact_type: \"SDE_HANDOFF_OBJECT_FOR_AFE\",\n      artifact_version: \"v0_1\",\n      artifact_status: \"handoff_ready\",\n      handoff_metadata: {\n        from_tool: \"SDE\",\n        to_tool: \"AFE\",\n        source_input_id: sourceInputId,\n        source_output_id: outputId,\n        generated_at_utc: generatedAtUtc\n      },\n      sde_output: input.response_envelope.output\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        -7168
+      ],
+      "id": "01a7f56c-5d0c-449c-a89a-e3829014d6e0",
+      "name": "SDE Handoff Preparation"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Load Fixture SDE Input Object",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input Structure": {
+      "main": [
+        [
+          {
+            "node": "Input Admissibility Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Failure Reason Emission": {
+      "main": [
+        [
+          {
+            "node": "Emit Invalid Input Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Output Schema": {
+      "main": [
+        [
+          {
+            "node": "Prepare AI Generation Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare AI Generation Payload": {
+      "main": [
+        [
+          {
+            "node": "AI Generate Question Set",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Generate Question Set",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Generate Question Set": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Output": {
+      "main": [
+        [
+          {
+            "node": "Validate Output Structure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Output Structure": {
+      "main": [
+        [
+          {
+            "node": "Prepare Output Artifact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Expected Output Fixture": {
+      "main": [
+        [
+          {
+            "node": "Compare to Expected Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Run Status": {
+      "main": [
+        [
+          {
+            "node": "Internal Diagnostics Failure Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Customer-Facing SDE Output": {
+      "main": [
+        [
+          {
+            "node": "Render Customer SDE Output (Markdown)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Render Customer SDE Output (LaTeX)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render Customer SDE Output (Markdown)": {
+      "main": [
+        [
+          {
+            "node": "Convert to Markdown",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render Customer SDE Output (LaTeX)": {
+      "main": [
+        [
+          {
+            "node": "Convert to LaTeX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Technical SDE Output": {
+      "main": [
+        [
+          {
+            "node": "Convert to JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "Prepare Intake Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Intake Payload": {
+      "main": [
+        [
+          {
+            "node": "Map Input to SDE Input Object",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input Admissibility Gate": {
+      "main": [
+        [
+          {
+            "node": "Load Output Schema",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failure Reason Emission",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Output Artifact": {
+      "main": [
+        [
+          {
+            "node": "Prepare Customer-Facing SDE Output",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Load Expected Output Fixture",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Prepare Technical SDE Output",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "SDE Handoff Preparation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compare to Expected Output": {
+      "main": [
+        [
+          {
+            "node": "Resolve Run Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Validation Context": {
+      "main": [
+        [
+          {
+            "node": "Validate Input Structure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Input to SDE Input Object": {
+      "main": [
+        [
+          {
+            "node": "Load Input Schema",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Input Schema": {
+      "main": [
+        [
+          {
+            "node": "Prepare Validation Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Fixture SDE Input Object": {
+      "main": [
+        [
+          {
+            "node": "Load Input Schema1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Input Schema1": {
+      "main": [
+        [
+          {
+            "node": "Prepare Validation Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Internal Diagnostics Failure Gate": {
+      "main": [
+        [
+          {
+            "node": "Prepare Failure Email Payload",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Emit Run Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Failure Email Payload": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SDE Handoff Preparation": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "748418f1-b58c-4be2-99f6-92181f46134d",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "edf12230450dcec069ac9de26cfbd389772d623f7116e4680673554c32e9dea5"
+  },
+  "id": "lZytP3TEkwQfGeE3",
+  "tags": []
+}

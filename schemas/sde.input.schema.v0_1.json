@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sde.input.schema.v0_1.json",
+  "title": "Structured Discovery Engine Input Schema",
+  "description": "Input contract for Structured Discovery Engine (SDE) v0.1. Defines the minimum and optional fields accepted before discovery question generation begins.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "sde_version",
+    "input_id",
+    "problem_description"
+  ],
+  "properties": {
+    "sde_version": {
+      "type": "string",
+      "const": "v0_1",
+      "description": "Schema version for the Structured Discovery Engine input contract."
+    },
+    "input_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unique identifier for the intake object being processed by SDE."
+    },
+    "problem_description": {
+      "type": "string",
+      "minLength": 20,
+      "description": "Raw human-provided description of the situation, project, workflow idea, need, or problem to be clarified."
+    },
+    "business_context": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional business or organizational context that helps frame the discovery questions."
+    },
+    "domain": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional domain hint such as operations, legal, sales, HR, compliance, product, or finance."
+    },
+    "stakeholders": {
+      "type": "array",
+      "description": "Optional list of known stakeholders, user groups, or decision-makers relevant to the problem.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "known_constraints": {
+      "type": "array",
+      "description": "Optional list of known limits, restrictions, policies, budgets, timelines, tooling, or environmental constraints.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "desired_output_type": {
+      "type": "string",
+      "enum": [
+        "DISCOVERY_QUESTIONS",
+        "INTAKE_OUTLINE",
+        "SCOPING_QUESTIONS",
+        "RISK_DISCOVERY",
+        "GENERAL_CLARIFICATION"
+      ],
+      "description": "Optional hint about the intended discovery output posture."
+    },
+    "desired_outcome": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional statement of the outcome the requester hopes to achieve."
+    },
+    "notes": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional freeform notes, context, or operator comments."
+    },
+    "source_metadata": {
+      "type": "object",
+      "description": "Optional metadata about where the intake came from.",
+      "additionalProperties": false,
+      "properties": {
+        "source_type": {
+          "type": "string",
+          "enum": [
+            "CHAT",
+            "FORM",
+            "EMAIL",
+            "DOCUMENT",
+            "API",
+            "MANUAL_ENTRY",
+            "OTHER"
+          ],
+          "description": "Origin type of the intake object."
+        },
+        "source_ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional source reference such as message id, document id, or ticket id."
+        },
+        "submitted_by": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional submitter or operator identifier."
+        }
+      }
+    }
+  }
+}

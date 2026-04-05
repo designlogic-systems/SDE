@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sde.output.schema.v0_1.json",
+  "title": "Structured Discovery Engine Output Schema",
+  "description": "Output contract for Structured Discovery Engine (SDE) v0.1. Defines the structured discovery question set emitted from a validated SDE input.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "sde_version",
+    "output_id",
+    "source_input_id",
+    "question_groups"
+  ],
+  "properties": {
+    "sde_version": {
+      "type": "string",
+      "const": "v0_1",
+      "description": "Schema version for the Structured Discovery Engine output contract."
+    },
+    "output_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unique identifier for the SDE output artifact."
+    },
+    "source_input_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identifier of the input object from which this discovery artifact was generated."
+    },
+    "question_groups": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Structured discovery groups containing context-aware questions.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "group_id",
+          "group_name",
+          "group_purpose",
+          "questions"
+        ],
+        "properties": {
+          "group_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Unique identifier for the question group."
+          },
+          "group_name": {
+            "type": "string",
+            "enum": [
+              "GOALS",
+              "SCOPE",
+              "CONSTRAINTS",
+              "STAKEHOLDERS",
+              "DATA_AND_SYSTEMS",
+              "RISKS",
+              "SUCCESS_CRITERIA",
+              "ASSUMPTIONS",
+              "OTHER"
+            ],
+            "description": "Normalized category name for the discovery group."
+          },
+          "group_purpose": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Human-readable explanation of why this question group exists."
+          },
+          "questions": {
+            "type": "array",
+            "minItems": 1,
+            "description": "Questions belonging to this discovery group.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "question_id",
+                "question_text",
+                "question_intent",
+                "priority"
+              ],
+              "properties": {
+                "question_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Unique identifier for the question within the output artifact."
+                },
+                "question_text": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "The actual discovery question to ask."
+                },
+                "question_intent": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Why the question is being asked and what ambiguity it is intended to reduce."
+                },
+                "priority": {
+                  "type": "string",
+                  "enum": [
+                    "HIGH",
+                    "MEDIUM",
+                    "LOW"
+                  ],
+                  "description": "Relative priority of the question for ambiguity reduction."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "ambiguity_flags": {
+      "type": "array",
+      "description": "Optional list of major ambiguity areas identified during discovery generation.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "completeness_notes": {
+      "type": "array",
+      "description": "Optional notes about obvious missing context, weak areas, or likely follow-up needs.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

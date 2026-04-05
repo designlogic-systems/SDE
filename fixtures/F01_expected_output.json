@@ -1,0 +1,202 @@
+{
+  "sde_version": "v0_1",
+  "output_id": "F01_OUT",
+  "source_input_id": "F01",
+  "question_groups": [
+    {
+      "group_id": "G01",
+      "group_name": "GOALS",
+      "group_purpose": "Clarify the primary objective of the assistant and distinguish immediate value from later ambitions.",
+      "questions": [
+        {
+          "question_id": "Q01",
+          "question_text": "What is the single most important outcome you want the first version of this assistant to achieve for the operations team?",
+          "question_intent": "Reduces primary-objective ambiguity by forcing prioritization of the initial business goal.",
+          "priority": "HIGH"
+        },
+        {
+          "question_id": "Q02",
+          "question_text": "Is the first version intended mainly to answer SOP questions, reduce response time, reduce staff workload, or improve consistency of internal guidance?",
+          "question_intent": "Clarifies which success dimension matters most so downstream design is not based on a vague improvement goal.",
+          "priority": "HIGH"
+        }
+      ]
+    },
+    {
+      "group_id": "G02",
+      "group_name": "SCOPE",
+      "group_purpose": "Separate the initial advisory phase from possible future automation and define what is in or out of scope.",
+      "questions": [
+        {
+          "question_id": "Q03",
+          "question_text": "For phase one, should the assistant be limited to answering questions only, with no ability to create or modify tickets?",
+          "question_intent": "Resolves phase-one execution-scope ambiguity and prevents advisory and action-taking behavior from being mixed too early.",
+          "priority": "HIGH"
+        },
+        {
+          "question_id": "Q04",
+          "question_text": "Is automatic maintenance ticket creation a future possibility only, or is it expected to be part of the near-term rollout plan?",
+          "question_intent": "Clarifies whether ticket automation is strategic future scope or an immediate design requirement.",
+          "priority": "HIGH"
+        },
+        {
+          "question_id": "Q05",
+          "question_text": "Which types of SOP questions should the assistant be allowed to answer in the first release, and which topics should remain out of scope?",
+          "question_intent": "Defines content boundaries so the assistant is not assumed to cover all operational knowledge areas by default.",
+          "priority": "MEDIUM"
+        }
+      ]
+    },
+    {
+      "group_id": "G03",
+      "group_name": "CONSTRAINTS",
+      "group_purpose": "Surface practical and policy limits that should shape the first version of the assistant.",
+      "questions": [
+        {
+          "question_id": "Q06",
+          "question_text": "Are there compliance, policy, security, or internal governance rules that would limit what this assistant can access or do?",
+          "question_intent": "Surfaces formal restrictions that may block certain capabilities before solution design begins.",
+          "priority": "HIGH"
+        },
+        {
+          "question_id": "Q07",
+          "question_text": "Does the organization require human approval before any AI-generated action can affect an operational system or maintenance workflow?",
+          "question_intent": "Clarifies approval constraints and whether action-taking behavior must always remain gated by a human.",
+          "priority": "HIGH"
+        },
+        {
+          "question_id": "Q08",
+          "question_text": "Is there a preferred rollout constraint such as internal-only access, limited pilot users, or read-only behavior for the first release?",
+          "question_intent": "Identifies rollout-limiting constraints that define the safe boundary of the first deployment.",
+          "priority": "MEDIUM"
+        }
+      ]
+    },
+    {
+      "group_id": "G04",
+      "group_name": "STAKEHOLDERS",
+      "group_purpose": "Identify ownership, operating roles, and approval authorities.",
+      "questions": [
+        {
+          "question_id": "Q09",
+          "question_text": "Who owns this initiative and will decide what the assistant is officially allowed to answer or do?",
+          "question_intent": "Resolves ownership ambiguity and identifies the authority responsible for scope and governance decisions.",
+          "priority": "HIGH"
+        },
+        {
+          "question_id": "Q10",
+          "question_text": "Who will be responsible for maintaining the SOP content or source material the assistant relies on?",
+          "question_intent": "Clarifies content stewardship and prevents the assistant from being designed without a content-maintenance owner.",
+          "priority": "MEDIUM"
+        },
+        {
+          "question_id": "Q11",
+          "question_text": "If ticket automation is later introduced, who must approve, monitor, or audit those actions?",
+          "question_intent": "Surfaces stakeholder and governance roles needed before execution-capable features can be considered.",
+          "priority": "HIGH"
+        }
+      ]
+    },
+    {
+      "group_id": "G05",
+      "group_name": "DATA_AND_SYSTEMS",
+      "group_purpose": "Determine what sources, systems, and access boundaries are relevant to the assistant.",
+      "questions": [
+        {
+          "question_id": "Q12",
+          "question_text": "What sources should the assistant use to answer SOP questions in the first version, such as SOP documents, internal knowledge bases, or shared documentation?",
+          "question_intent": "Clarifies the knowledge-source boundary so the assistant is tied to real source material rather than assumed general knowledge.",
+          "priority": "HIGH"
+        },
+        {
+          "question_id": "Q13",
+          "question_text": "Which operational systems, if any, should the assistant be allowed to read from in phase one?",
+          "question_intent": "Defines read-access boundaries and prevents hidden assumptions about system connectivity.",
+          "priority": "HIGH"
+        },
+        {
+          "question_id": "Q14",
+          "question_text": "If ticket creation becomes part of a later phase, which maintenance or ticketing system would be the target system of record?",
+          "question_intent": "Resolves future system-target ambiguity and makes later automation discussions concrete.",
+          "priority": "MEDIUM"
+        }
+      ]
+    },
+    {
+      "group_id": "G06",
+      "group_name": "RISKS",
+      "group_purpose": "Expose the main failure concerns and unacceptable outcomes associated with the assistant.",
+      "questions": [
+        {
+          "question_id": "Q15",
+          "question_text": "What is the biggest risk if the assistant gives an incorrect SOP answer to an operations user?",
+          "question_intent": "Clarifies the practical consequence of advisory failure so risk posture can be sized correctly.",
+          "priority": "HIGH"
+        },
+        {
+          "question_id": "Q16",
+          "question_text": "What is the biggest risk if the assistant ever creates a maintenance ticket incorrectly or at the wrong time?",
+          "question_intent": "Surfaces execution-risk consequences and distinguishes automation risk from advisory risk.",
+          "priority": "HIGH"
+        },
+        {
+          "question_id": "Q17",
+          "question_text": "Are there any categories of operational guidance or actions that would be unacceptable for the assistant to handle under any circumstance?",
+          "question_intent": "Defines hard risk boundaries and forbidden areas early.",
+          "priority": "MEDIUM"
+        }
+      ]
+    },
+    {
+      "group_id": "G07",
+      "group_name": "SUCCESS_CRITERIA",
+      "group_purpose": "Define how the first version would be judged successful or unsuccessful.",
+      "questions": [
+        {
+          "question_id": "Q18",
+          "question_text": "How will you measure whether the first version of the assistant is successful?",
+          "question_intent": "Forces explicit success criteria rather than leaving value undefined.",
+          "priority": "HIGH"
+        },
+        {
+          "question_id": "Q19",
+          "question_text": "What would convince you that the assistant is useful enough to justify a second phase such as deeper system access or ticket automation?",
+          "question_intent": "Defines the decision threshold for expansion into higher-risk capabilities.",
+          "priority": "MEDIUM"
+        }
+      ]
+    },
+    {
+      "group_id": "G08",
+      "group_name": "ASSUMPTIONS",
+      "group_purpose": "Surface assumptions that are currently implied but not yet confirmed.",
+      "questions": [
+        {
+          "question_id": "Q20",
+          "question_text": "Are you assuming that the same assistant should handle both knowledge support and operational action-taking, or could those need to remain separate capabilities?",
+          "question_intent": "Challenges an unstated architectural assumption that advisory and execution functions belong in one system.",
+          "priority": "HIGH"
+        },
+        {
+          "question_id": "Q21",
+          "question_text": "Are you assuming that approval requirements can be decided later, or do they need to be defined before the first version is scoped?",
+          "question_intent": "Surfaces whether governance is being postponed in a way that could distort the initial design.",
+          "priority": "MEDIUM"
+        }
+      ]
+    }
+  ],
+  "ambiguity_flags": [
+    "UNCLEAR_PRIMARY_OBJECTIVE",
+    "UNDEFINED_PHASE_ONE_SCOPE",
+    "UNKNOWN_SYSTEM_BOUNDARY",
+    "UNDEFINED_APPROVAL_MODEL",
+    "MISSING_SUCCESS_CRITERIA",
+    "BLENDED_ADVISORY_AND_EXECUTION_INTENT"
+  ],
+  "completeness_notes": [
+    "The input clearly describes interest in AI assistance but does not yet define the primary first-phase objective tightly enough for downstream planning.",
+    "The request blends advisory behavior and possible future execution behavior, which should be separated explicitly before implementation decisions are made.",
+    "System-access boundaries and approval requirements are not yet defined and are likely to be critical constraints for any later automation capability."
+  ]
+}

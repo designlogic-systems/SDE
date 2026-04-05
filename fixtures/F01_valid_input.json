@@ -1,0 +1,25 @@
+{
+  "sde_version": "v0_1",
+  "input_id": "F01",
+  "problem_description": "We want an internal AI assistant that can answer SOP questions for our operations team and maybe later create maintenance tickets automatically, but we are not sure what systems it should connect to or how much approval should be required.",
+  "business_context": "The company wants to explore using AI to reduce repetitive operational support work and improve response speed for internal process questions.",
+  "domain": "operations",
+  "stakeholders": [
+    "operations team",
+    "operations manager",
+    "IT team"
+  ],
+  "known_constraints": [
+    "The first version should likely be internal only.",
+    "The team is not yet sure which systems the assistant should access.",
+    "Any future ticket automation may require approvals.",
+    "The company wants to reduce risk while exploring AI."
+  ],
+  "desired_output_type": "DISCOVERY_QUESTIONS",
+  "notes": "The request is intentionally early-stage and ambiguous. It mixes advisory use with possible future execution behavior.",
+  "source_metadata": {
+    "source_type": "MANUAL_ENTRY",
+    "source_ref": "F01_valid_input",
+    "submitted_by": "operator"
+  }
+}
