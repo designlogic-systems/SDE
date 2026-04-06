@@ -39,7 +39,7 @@ SDE:
 - validates it against a defined schema  
 - generates grouped discovery questions  
 - surfaces ambiguity and completeness gaps  
-- produces outputs in Markdown, JSON, and PDF  
+- produces outputs in Markdown, JSON, and PDF (from LaTeX rendering) 
 - emits diagnostics if outputs are invalid or incomplete  
 - supports downstream handoff (e.g., AFE)
 
@@ -84,6 +84,17 @@ See:
 
 ---
 
+## How to Review This Repo
+
+Start with:
+
+1. `screenshots/` for workflow overview
+2. `sample-input/` and `sample-output/` for real artifacts
+3. `n8n-workflow/` for the n8n workflow definition
+4. `docs/` for system explanation
+
+---
+
 ## Implementation Overview
 
 SDE is currently implemented as an **n8n workflow** with:
@@ -97,7 +108,7 @@ SDE is currently implemented as an **n8n workflow** with:
 
 The workflow export is available in:
 
-→ `workflow-export/sde.n8n.workflow.json`
+→ `n8n-workflow/sde.n8n.workflow.json`
 
 ---
 
@@ -109,7 +120,7 @@ sde/
 ├─ screenshots/
 ├─ sample-input/
 ├─ sample-output/
-├─ workflow-export/
+├─ n8n-workflow/
 ├─ docs/
 ├─ docs-support/
 ├─ schemas/
@@ -121,7 +132,7 @@ sde/
 - `sample-input/` → example problem inputs  
 - `sample-output/` → generated question sets and artifacts  
 - `screenshots/` → workflow visuals  
-- `workflow-export/` → n8n workflow export  
+- `n8n-workflow/` → n8n workflow export  
 - `schemas/` → input/output validation schemas  
 - `docs/` → system-level explanation and mapping  
 - `docs-support/` → playbooks and operator definitions  
@@ -172,6 +183,18 @@ Ambiguity
 → AFE (Refinement)  
 → DTPL (Trace & Protection)  
 → AGBE (Governance Blueprint)
+
+---
+
+## What This Demonstrates
+
+SDE demonstrates:
+
+- structured AI workflow design
+- schema-aware input and output validation
+- multi-format artifact generation
+- failure diagnostics and visibility
+- workflow documentation and system mapping
 
 ---
 
