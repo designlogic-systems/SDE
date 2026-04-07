@@ -127,7 +127,7 @@ sde/
   System explanation, workflow mapping, and demo guidance
 
 * `docs-support/`
-  Operator definitions, playbooks, and support material
+  Operator definitions
 
 * `fixtures/`
   Validation and test artifacts
