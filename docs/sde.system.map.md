@@ -26,7 +26,7 @@ Input
 - `schemas/`
   - input and output validation boundaries
 
-- `workflow-export/`
+- `n8n-workflow/`
   - n8n workflow export
 
 - `fixtures/`
@@ -34,9 +34,6 @@ Input
 
 - `docs-support/operators/`
   - operator contract and execution-lens prompt used in question generation
-
-- `docs-support/playbooks/`
-  - supporting review / validation guidance
 
 ## Main Idea
 
