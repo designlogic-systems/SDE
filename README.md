@@ -26,8 +26,34 @@ This repository demonstrates:
 - multi-format artifact generation
 - failure diagnostics and visibility
 - workflow documentation and system mapping
+- repeated-run evaluation and refinement design
+- structured analysis of workflow behavior across runs
 
-This is not a prompt experiment. It is a structured workflow artifact with explicit validation, output discipline, and supporting documentation.
+This is not a prompt experiment. It is a structured workflow system with explicit validation, output discipline, supporting documentation, and an analysis layer designed to support controlled refinement.
+
+---
+
+## Evaluation & Refinement System
+
+SDE includes a structured analysis layer designed to evaluate behavior across repeated runs and support controlled refinement of the AI question-generation logic.
+
+Rather than judging behavior from a single output, the analysis layer is designed to:
+
+- capture repeated-run evidence
+- measure structural consistency
+- measure semantic coverage consistency
+- measure bounded variability
+- identify likely refinement targets in the execution lens
+
+The goal is not exact output identity.
+
+The goal is:
+
+- stable structure
+- consistent semantic coverage
+- bounded and explainable variability
+
+This makes SDE not only a workflow artifact, but also a refinement-ready system for inspecting and improving repeated-run behavior.
 
 ---
 
@@ -99,10 +125,16 @@ For a fast review of the repo:
 2. Open `docs/sde_demo_script.md`
 3. Review `sample-input/sample_input_01.md`
 4. Review `sample-output/sample_output_01.md`
-5. Inspect `n8n-workflow/sde.n8n.workflow.json`
-6. Review `screenshots/`
+5. Review `screenshots/`
+6. Inspect `n8n-workflow/sde.n8n.workflow.json`
+7. Open `analysis/README.md`
 
-This gives the quickest view of the system, the workflow shape, and the generated artifacts.
+This gives the quickest view of:
+
+- what SDE does
+- how the workflow is structured
+- what the generated artifacts look like
+- how repeated-run behavior is analyzed and refined
 
 ---
 
@@ -111,26 +143,33 @@ This gives the quickest view of the system, the workflow shape, and the generate
 ```text
 sde/
 ├─ README.md
+├─ analysis/
 ├─ docs/
 ├─ docs-support/
 ├─ fixtures/
+├─ n8n-workflow/
 ├─ sample-input/
 ├─ sample-output/
 ├─ schemas/
-├─ screenshots/
-└─ n8n-workflow/
+└─ screenshots/
 ```
 
 ### Key Areas
+
+* `analysis/`
+  Repeated-run evaluation, metrics design, execution-lens refinement logic, and analysis system documentation
 
 * `docs/`
   System explanation, workflow mapping, and demo guidance
 
 * `docs-support/`
-  Operator definitions
+  Operator definitions and support material
 
 * `fixtures/`
   Validation and test artifacts
+
+* `n8n-workflow/`
+  Exported n8n workflow definition
 
 * `sample-input/`
   Example intake input
@@ -144,14 +183,14 @@ sde/
 * `screenshots/`
   Workflow, system, and execution visuals
 
-* `n8n-workflow/`
-  Exported n8n workflow definition
-
 ---
 
 ## Implementation Overview
 
-SDE is currently implemented as an **n8n workflow** with:
+SDE currently consists of two connected layers:
+
+### 1. Workflow Layer
+Implemented as an **n8n workflow** with:
 
 * structured intake mapping
 * schema validation gates
@@ -163,6 +202,16 @@ SDE is currently implemented as an **n8n workflow** with:
 Workflow export:
 
 `n8n-workflow/sde.n8n.workflow.json`
+
+### 2. Analysis Layer
+Documented in the `analysis/` directory, with support for:
+
+* repeated-run experiment design
+* run-level, group-level, and question-level evidence capture
+* Availability / Direction / Stabilization metric framing
+* execution-lens refinement using structured evidence
+
+This analysis layer is designed to support controlled improvement of SDE behavior over time rather than one-off prompt tweaking.
 
 ---
 
@@ -221,7 +270,7 @@ At present, SDE is the implemented and operational first stage.
 
 ## What This Repo Shows
 
-This repo shows the ability to design and document an AI workflow with:
+This repo shows the ability to design and document an AI workflow system with:
 
 * bounded intake handling
 * validation-aware workflow structure
@@ -229,13 +278,16 @@ This repo shows the ability to design and document an AI workflow with:
 * artifact generation across formats
 * explicit failure handling
 * downstream-oriented system design
+* repeated-run evaluation design
+* structured refinement of generation behavior
 
 ---
 
 ## Status
 
-* SDE is implemented and operational
-* SDE is currently the first step in a broader pipeline
+* SDE is implemented and operational as a structured AI workflow
+* SDE includes a documented analysis and refinement layer for repeated-run evaluation
+* SDE is currently the first implemented step in a broader DesignLogic pipeline
 * downstream systems are defined but not yet implemented in this public repo
 
 ---
